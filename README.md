@@ -31,7 +31,8 @@ The current installer script performs the following steps:
 5. Configures FreeSWITCH module selection
 6. Builds and installs FreeSWITCH to /usr/local/freeswitch
 7. Installs FreeSWITCH sound packages
-8. Creates the freeswitch system user and group
+8. Creates the freeswitch system user and group, and adds the invoking user and any
+   sudo-capable users to the freeswitch group
 9. Installs a systemd service definition for FreeSWITCH
 
 ## Current supported environment
@@ -93,6 +94,8 @@ If you want to install it from a remote location, you can also clone the repo fi
 - The installer defaults to FreeSWITCH tag v1.11.1 if no tag is provided.
 - The script is designed to be rerun safely after a partial failure.
 - Some module selections are intentionally customized for this setup.
+- Membership of the freeswitch group (which grants access to `conf/` and `log/` without
+  sudo) only applies to new login sessions. Log out and back in after installing.
 
 ## Planned improvements
 

@@ -92,6 +92,36 @@ sudo make cd-sounds-install cd-moh-install
 getent group freeswitch >/dev/null || sudo groupadd freeswitch
 id -u freeswitch >/dev/null 2>&1 || sudo adduser --quiet --system --home "$PREFIX" \
   --gecos 'FreeSWITCH open source softswitch' --ingroup freeswitch --disabled-password freeswitch
+
+### Give administrators access to FreeSWITCH's config/log/db directories.
+### The chmod further down leaves conf/, log/, db/, certs/, recordings/ and storage/ as
+### ug=rwX,o= - so membership of the freeswitch group is what lets an admin edit configs
+### and read logs without sudo. Add the invoking user plus everyone who already has sudo.
+###
+### NOTE: supplementary group changes only apply to NEW login sessions. Existing shells
+### (including the one running this script) keep their old group set until re-login;
+### 'newgrp' cannot be used from a script to work around that.
+FS_ADMINS="${SUDO_USER:-${USER:-}}"
+for admin_group in sudo admin; do
+  members="$(getent group "$admin_group" | cut -d: -f4 | tr ',' ' ')" || members=""
+  FS_ADMINS="$FS_ADMINS $members"
+done
+### The invoking user is usually also a member of the sudo group - dedupe so we do not
+### call usermod twice for them.
+FS_ADMINS="$(echo "$FS_ADMINS" | tr ' ' '\n' | sort -u)"
+
+# shellcheck disable=SC2086 # word splitting is intentional here
+for u in $FS_ADMINS; do
+  if [ "$u" = "root" ] || ! id -u "$u" >/dev/null 2>&1; then
+    continue
+  fi
+  if id -nG "$u" 2>/dev/null | tr ' ' '\n' | grep -qx freeswitch; then
+    continue
+  fi
+  sudo usermod -aG freeswitch "$u"
+  echo "Added '$u' to the freeswitch group"
+done
+
 if [ ! -x "$PREFIX/bin/freeswitch" ]; then
   echo "ERROR: $PREFIX/bin/freeswitch is missing - 'make install' did not complete" >&2
   exit 1
@@ -125,3 +155,9 @@ sudo sed "s|\${PREFIX}|$PREFIX|g" "$BUILD_DIR/freeswitch-install/resources/frees
 
 sudo systemctl daemon-reload
 sudo systemctl enable --now freeswitch
+
+echo
+echo "FreeSWITCH installed. Admins were added to the 'freeswitch' group, which grants"
+echo "read/write access to $PREFIX/conf and $PREFIX/log without sudo."
+echo "Your current shell does not have the new group yet - log out and back in (or run"
+echo "'newgrp freeswitch') to pick it up."
