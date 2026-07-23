@@ -15,7 +15,7 @@ sudo apt -y install htop curl git sngrep ca-certificates \
 sudo apt -y install \
   git build-essential automake autoconf wget libtool \
   libncurses-dev libjpeg-dev libsqlite3-dev libcurl4-openssl-dev \
-  libpcre3-dev libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
+libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
   libssl-dev zlib1g-dev liblua5.2-dev libopus-dev libsndfile1-dev \
   libavformat-dev libswscale-dev libtool-bin libtiff-dev cmake uuid-dev \
   libpq-dev libshout3-dev libmp3lame-dev libmpg123-dev nasm yasm \
