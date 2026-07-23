@@ -31,6 +31,7 @@ cd "$BUILD_DIR"
 
 ### Install spandsp
 cd "$BUILD_DIR/spandsp"
+
 sudo ./bootstrap.sh
 sudo ./configure
 sudo make -j"$JOBS"
@@ -91,9 +92,29 @@ sudo make cd-sounds-install cd-moh-install
 getent group freeswitch >/dev/null || sudo groupadd freeswitch
 id -u freeswitch >/dev/null 2>&1 || sudo adduser --quiet --system --home "$PREFIX" \
   --gecos 'FreeSWITCH open source softswitch' --ingroup freeswitch --disabled-password freeswitch
+if [ ! -x "$PREFIX/bin/freeswitch" ]; then
+  echo "ERROR: $PREFIX/bin/freeswitch is missing - 'make install' did not complete" >&2
+  exit 1
+fi
+
 sudo chown -R freeswitch:freeswitch "$PREFIX"
+
+### Lock everything down to the service account first.
 sudo chmod -R ug=rwX,o= "$PREFIX"
-sudo chmod -R u=rwx,g=rx "$PREFIX"/bin/*
+
+### Then reopen the read-only parts. Binaries, libraries, modules and sounds must stay
+### readable/executable by ordinary users so fs_cli works without sudo; conf/, db/, log/,
+### run/, certs/, recordings/ and storage/ stay owner+group only.
+###
+### Pass DIRECTORIES here, never a glob: a glob is expanded by the unprivileged calling
+### shell, which can no longer read $PREFIX after the chmod above, and the unexpanded
+### pattern is then handed to chmod verbatim.
+sudo chmod o=rX "$PREFIX"
+for d in bin lib mod share; do
+  if [ -d "$PREFIX/$d" ]; then
+    sudo chmod -R u=rwX,g=rX,o=rX "$PREFIX/$d"
+  fi
+done
 
 sudo ln -sf "$PREFIX/bin/freeswitch" /usr/local/bin/freeswitch
 sudo ln -sf "$PREFIX/bin/fs_cli"     /usr/local/bin/fs_cli
