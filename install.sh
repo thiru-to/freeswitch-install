@@ -3,7 +3,7 @@ set -euo pipefail
 
 FS_VERSION="${1:-v1.11.1}"
 BUILD_DIR="/usr/src"
-PREFIX="/usr"
+PREFIX="/usr/local/freeswitch"
 JOBS="$(nproc)"
 
 sudo apt -y update
@@ -78,7 +78,7 @@ sudo sed -i 's|^applications/mod_say_fr|#applications/mod_say_fr|' modules.conf
 sudo sed -i 's|^applications/mod_av|#applications/mod_av|' modules.conf
 sudo sed -i 's|^xml_int/mod_xml_rpc|#xml_int/mod_xml_rpc|' modules.conf
 
-sudo ./configure -C --prefix="$PREFIX" \
+sudo ./configure -C \
   --disable-dependency-tracking --enable-debug --enable-core-pgsql-support --with-openssl
 
 sudo make -j"$JOBS"
@@ -114,12 +114,18 @@ for u in $FS_ADMINS; do
   echo "Added '$u' to the freeswitch group"
 done
 
-if [ ! -x "$PREFIX/bin/freeswitch" ]; then
-  echo "ERROR: $PREFIX/bin/freeswitch is missing - 'make install' did not complete" >&2
-  exit 1
-fi
+
+
+sudo cp -r /usr/local/freeswitch/conf /etc/freeswitch 
+sudo cp /usr/local/freeswitch/bin/fs_cli /usr/bin/fs_cli 
+sudo cp /usr/local/freeswitch/bin/freeswitch /usr/bin/freeswitch
 
 sudo chown -R freeswitch:freeswitch /etc/freeswitch
+
+if [ ! -x "/usr/bin/freeswitch" ]; then
+  echo "ERROR: /usr/bin/freeswitch is missing - 'make install' did not complete" >&2
+  exit 1
+fi
 
 ### Create freeswitch service
 sudo sed "s|\${PREFIX}|$PREFIX|g" "$BUILD_DIR/freeswitch-install/resources/freeswitch.service" \
