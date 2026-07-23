@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-FS_VERSION="${1:-v1.10.13}"
+FS_VERSION="${1:-v1.11.1}"
 BUILD_DIR="/usr/src"
 PREFIX="/usr/local/freeswitch"
 JOBS="$(nproc)"
@@ -15,10 +15,11 @@ sudo apt -y install htop curl git sngrep ca-certificates \
 sudo apt -y install \
   git build-essential automake autoconf wget libtool \
   libncurses-dev libjpeg-dev libsqlite3-dev libcurl4-openssl-dev \
-  libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
+  libpcre3-dev libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
   libssl-dev zlib1g-dev liblua5.2-dev libopus-dev libsndfile1-dev \
   libavformat-dev libswscale-dev libtool-bin libtiff-dev cmake uuid-dev \
-  libpq-dev libshout3-dev libmp3lame-dev nasm yasm libnode-dev
+  libpq-dev libshout3-dev libmp3lame-dev libmpg123-dev nasm yasm \
+  libhiredis-dev libmemcached-dev
 
 ### Clone repositories.
 cd "$BUILD_DIR"
@@ -66,7 +67,6 @@ sudo sed -i 's|^#event_handlers/mod_fail2ban|event_handlers/mod_fail2ban|' modul
 sudo sed -i 's|^#formats/mod_shout|formats/mod_shout|' modules.conf
 sudo sed -i 's|^#formats/mod_pgsql|formats/mod_pgsql|' modules.conf
 sudo sed -i 's|^#xml_int/mod_xml_curl|xml_int/mod_xml_curl|' modules.conf
-sudo sed -i 's|^#languages/mod_v8|languages/mod_v8|' modules.conf
 
 ### Disable modules
 sudo sed -i 's|^applications/mod_signalwire|#applications/mod_signalwire|' modules.conf
@@ -90,7 +90,7 @@ sudo make cd-sounds-install cd-moh-install
 ### Create freeswitch group & user and give permissions.
 getent group freeswitch >/dev/null || sudo groupadd freeswitch
 id -u freeswitch >/dev/null 2>&1 || sudo adduser --quiet --system --home "$PREFIX" \
-  --comment 'FreeSWITCH open source softswitch' --ingroup freeswitch freeswitch --disabled-password
+  --gecos 'FreeSWITCH open source softswitch' --ingroup freeswitch --disabled-password freeswitch
 sudo chown -R freeswitch:freeswitch "$PREFIX"
 sudo chmod -R ug=rwX,o= "$PREFIX"
 sudo chmod -R u=rwx,g=rx "$PREFIX"/bin/*
