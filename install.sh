@@ -131,10 +131,11 @@ fi
 sudo sed "s|\${PREFIX}|$PREFIX|g" "$BUILD_DIR/freeswitch-install/resources/freeswitch.service" \
   | sudo tee /etc/systemd/system/freeswitch.service >/dev/null
 
-cd
+sudo systemctl daemon-reload
+sudo systemctl enable freeswitch.service
+
 
 echo
-echo "FreeSWITCH installed. Admins were added to the 'freeswitch' group, which grants"
-echo "read/write access to $PREFIX/conf and $PREFIX/log without sudo."
-echo "Your current shell does not have the new group yet - log out and back in (or run"
-echo "'newgrp freeswitch') to pick it up."
+echo "FreeSWITCH installed.
+
+
