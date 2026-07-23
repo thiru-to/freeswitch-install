@@ -13,8 +13,8 @@ LimitNPROC=60000
 LimitSTACK=250000
 LimitRTPRIO=infinity
 LimitRTTIME=7000000
-ExecStart=${PREFIX}/bin/freeswitch -ncwait -nonat
-ExecReload=${PREFIX}/bin/fs_cli -x reloadxml
+ExecStart=/usr/bin/freeswitch -ncwait -nonat
+ExecReload=/usr/bin/fs_cli -x reloadxml
 Restart=on-failure
 RestartSec=5
 

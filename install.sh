@@ -3,7 +3,7 @@ set -euo pipefail
 
 FS_VERSION="${1:-v1.11.1}"
 BUILD_DIR="/usr/src"
-PREFIX="/usr/local/freeswitch"
+PREFIX="/usr"
 JOBS="$(nproc)"
 
 sudo apt -y update
@@ -15,7 +15,7 @@ sudo apt -y install htop curl git sngrep ca-certificates \
 sudo apt -y install \
   git build-essential automake autoconf wget libtool \
   libncurses-dev libjpeg-dev libsqlite3-dev libcurl4-openssl-dev \
-libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
+  libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
   libssl-dev zlib1g-dev liblua5.2-dev libopus-dev libsndfile1-dev \
   libavformat-dev libswscale-dev libtool-bin libtiff-dev cmake uuid-dev \
   libpq-dev libshout3-dev libmp3lame-dev libmpg123-dev nasm yasm \
@@ -90,17 +90,9 @@ sudo make cd-sounds-install cd-moh-install
 
 ### Create freeswitch group & user and give permissions.
 getent group freeswitch >/dev/null || sudo groupadd freeswitch
-id -u freeswitch >/dev/null 2>&1 || sudo adduser --quiet --system --home "$PREFIX" \
+id -u freeswitch >/dev/null 2>&1 || sudo adduser --quiet --system  \
   --gecos 'FreeSWITCH open source softswitch' --ingroup freeswitch --disabled-password freeswitch
 
-### Give administrators access to FreeSWITCH's config/log/db directories.
-### The chmod further down leaves conf/, log/, db/, certs/, recordings/ and storage/ as
-### ug=rwX,o= - so membership of the freeswitch group is what lets an admin edit configs
-### and read logs without sudo. Add the invoking user plus everyone who already has sudo.
-###
-### NOTE: supplementary group changes only apply to NEW login sessions. Existing shells
-### (including the one running this script) keep their old group set until re-login;
-### 'newgrp' cannot be used from a script to work around that.
 FS_ADMINS="${SUDO_USER:-${USER:-}}"
 for admin_group in sudo admin; do
   members="$(getent group "$admin_group" | cut -d: -f4 | tr ',' ' ')" || members=""
@@ -127,34 +119,13 @@ if [ ! -x "$PREFIX/bin/freeswitch" ]; then
   exit 1
 fi
 
-sudo chown -R freeswitch:freeswitch "$PREFIX"
-
-### Lock everything down to the service account first.
-sudo chmod -R ug=rwX,o= "$PREFIX"
-
-### Then reopen the read-only parts. Binaries, libraries, modules and sounds must stay
-### readable/executable by ordinary users so fs_cli works without sudo; conf/, db/, log/,
-### run/, certs/, recordings/ and storage/ stay owner+group only.
-###
-### Pass DIRECTORIES here, never a glob: a glob is expanded by the unprivileged calling
-### shell, which can no longer read $PREFIX after the chmod above, and the unexpanded
-### pattern is then handed to chmod verbatim.
-sudo chmod o=rX "$PREFIX"
-for d in bin lib mod share; do
-  if [ -d "$PREFIX/$d" ]; then
-    sudo chmod -R u=rwX,g=rX,o=rX "$PREFIX/$d"
-  fi
-done
-
-sudo ln -sf "$PREFIX/bin/freeswitch" /usr/local/bin/freeswitch
-sudo ln -sf "$PREFIX/bin/fs_cli"     /usr/local/bin/fs_cli
+sudo chown -R freeswitch:freeswitch /etc/freeswitch
 
 ### Create freeswitch service
 sudo sed "s|\${PREFIX}|$PREFIX|g" "$BUILD_DIR/freeswitch-install/resources/freeswitch.service" \
   | sudo tee /etc/systemd/system/freeswitch.service >/dev/null
 
-sudo systemctl daemon-reload
-sudo systemctl enable --now freeswitch
+cd
 
 echo
 echo "FreeSWITCH installed. Admins were added to the 'freeswitch' group, which grants"
