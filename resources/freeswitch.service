@@ -1,0 +1,21 @@
+Description=FreeSWITCH Telephony Platform
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+User=freeswitch
+Group=freeswitch
+LimitCORE=infinity
+LimitNOFILE=100000
+LimitNPROC=60000
+LimitSTACK=250000
+LimitRTPRIO=infinity
+LimitRTTIME=7000000
+ExecStart=${PREFIX}/bin/freeswitch -ncwait -nonat
+ExecReload=${PREFIX}/bin/fs_cli -x reloadxml
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
