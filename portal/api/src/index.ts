@@ -10,6 +10,7 @@ import { env } from "./env";
 import { extensions } from "./routes/extensions";
 import { fsXml } from "./routes/fs-xml";
 import { tenants } from "./routes/tenants";
+import { faxHook, faxes } from "./routes/fax";
 import { ping as redisPing } from "./services/redis";
 import { esl } from "./services/esl";
 import { pool, db } from "./db";
@@ -66,9 +67,12 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
 // The FreeSWITCH XML fallback. Machine-authenticated, not a user session.
 app.route("/fs/xml", fsXml);
+// fax_receive.lua reports completed receives here, with the same machine credential.
+app.route("/fs/fax", faxHook);
 
 app.route("/api/tenant", tenants);
 app.route("/api/extensions", extensions);
+app.route("/api/faxes", faxes);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 

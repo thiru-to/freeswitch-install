@@ -618,7 +618,17 @@ route[WITHINDLG] {
     } else if (is_method("INVITE")) {
         # Re-INVITE: media may be moving, so refresh the rtpengine offer.
         record_route();
-        route(NATMANAGE);
+
+        # A T.38 switch arrives as an in-dialog re-INVITE with an image/udptl stream rather
+        # than audio. Forcing the usual RTP/AVP flags onto it rewrites the SDP into something
+        # neither end asked for and the fax fails - so hand it to rtpengine untouched and let
+        # its T.38 gateway (Debian links libspandsp) do the work.
+        if (has_body("application/sdp") && search_body("m=image")) {
+            xlog("L_INFO", "T.38 re-INVITE for \$ci - passing SDP through\n");
+            rtpengine_manage("replace-origin replace-session-connection");
+        } else {
+            route(NATMANAGE);
+        }
     }
     route(RELAY);
     exit;

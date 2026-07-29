@@ -140,6 +140,10 @@ RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 RestrictNamespaces=true
 LockPersonality=true
 ReadWritePaths=${API_DIR}
+# The fax spool. ProtectSystem=strict makes everything outside these paths read-only, so
+# without this the TIFF-to-PDF conversion fails silently - the file is written by FreeSWITCH,
+# the API can read it, and the PDF it tries to write next simply never appears.
+ReadWritePaths=${FAX_SPOOL:-/var/spool/voip-fax}
 
 StandardOutput=journal
 StandardError=journal

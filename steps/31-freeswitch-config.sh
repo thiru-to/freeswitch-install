@@ -242,8 +242,16 @@ EOF
 ### mechanism mod_xml_curl uses - so lookups are served in-process from Redis instead of over
 ### HTTP. The API can be down or mid-deploy and calls keep flowing.
 install -d -m 0755 -o freeswitch -g freeswitch "$PREFIX/scripts"
-install -m 0644 -o freeswitch -g freeswitch \
-  "$REPO_DIR/resources/lua/xml_handler.lua" "$PREFIX/scripts/xml_handler.lua"
+for script in "$REPO_DIR"/resources/lua/*.lua; do
+  install -m 0644 -o freeswitch -g freeswitch "$script" "$PREFIX/scripts/$(basename "$script")"
+done
+
+### Fax spool. tiff2pdf (libtiff-tools) converts what spandsp writes into something a person
+### can actually open - the conversion is the feature, not the receiving.
+apt_install libtiff-tools
+FAX_SPOOL="${FAX_SPOOL:-/var/spool/voip-fax}"
+install -d -m 0770 -o freeswitch -g "$API_USER" "$FAX_SPOOL" 2>/dev/null || \
+  install -d -m 0775 -o freeswitch -g freeswitch "$FAX_SPOOL"
 
 write_file "$CONF/autoload_configs/lua.conf.xml" 0644 freeswitch:freeswitch <<EOF || true
 <configuration name="lua.conf" description="LUA Configuration">
@@ -265,6 +273,9 @@ write_file /etc/systemd/system/freeswitch.service.d/10-voip-env.conf 0644 <<EOF 
 [Service]
 Environment=VOIP_PG_DSN=pgsql://host=${DB_HOST} port=${DB_PORT} dbname=voipapi user=${API_USER} password=${API_DB_PASSWORD}
 Environment=VOIP_KAM_EGRESS=${FS_HOST}:${KAM_EGRESS_PORT}
+Environment=VOIP_API_BASE=${API_BASE_URL}
+Environment=VOIP_FS_GATEWAY_SECRET=${FS_XML_GATEWAY_SECRET}
+Environment=VOIP_FAX_SPOOL=${FAX_SPOOL}
 EOF
 systemctl daemon-reload
 
