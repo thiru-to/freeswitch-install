@@ -19,7 +19,7 @@ sudo apt -y install \
   libssl-dev zlib1g-dev liblua5.2-dev libopus-dev libsndfile1-dev \
   libavformat-dev libswscale-dev libtool-bin libtiff-dev cmake uuid-dev \
   libpq-dev libshout3-dev libmp3lame-dev libmpg123-dev \
-  libhiredis-dev libmemcached-dev
+  libhiredis-dev
 
 ### Clone repositories.
 cd "$BUILD_DIR"
@@ -126,6 +126,18 @@ if [ ! -f "$PREFIX/conf/freeswitch.xml" ]; then
   echo "ERROR: $PREFIX/conf/freeswitch.xml is missing - 'make config-minimal' did not complete" >&2
   exit 1
 fi
+
+### The stock minimal config autoloads mod_xml_rpc, which we deliberately do not build.
+### Left alone it logs a [CRIT] on every start. Comment out any autoloaded module that
+### was not built so a disabled module never turns into boot noise.
+FS_AUTOLOAD_CONF="$PREFIX/conf/autoload_configs/modules.conf.xml"
+for m in $FS_DISABLE_MODULES; do
+  mod_name="${m##*/}"
+  grep -q "<load module=\"${mod_name}\"/>" "$FS_AUTOLOAD_CONF" || continue
+  sudo sed -i "s|<load module=\"${mod_name}\"/>|<!-- <load module=\"${mod_name}\"/> -->|" \
+    "$FS_AUTOLOAD_CONF"
+  echo "Un-autoloaded '$mod_name' - it is not built"
+done
 
 ### Create freeswitch group & user and give permissions.
 getent group freeswitch >/dev/null || sudo groupadd freeswitch
