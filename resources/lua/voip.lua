@@ -65,16 +65,9 @@ function M.go(session, domain, dtype, did, depth)
   end
 
   if dtype == "extension" then
-    -- did is the extension row id for stored destinations, but the number for a direct dial.
-    -- Both are supported: the caller passes whichever it holds.
-    local number = did
-    session:execute("set", "hangup_after_bridge=true")
-    session:execute("bridge", string.format("user/%s@%s", number, domain))
-    -- Only reached if the bridge failed; an answered call never returns here.
-    if session:ready() then
-      session:execute("answer", "")
-      session:execute("voicemail", string.format("default %s %s", domain, number))
-    end
+    -- Delegated rather than bridged here, so the user's own DND and forwarding apply wherever
+    -- the call came from - an inbound DID, an IVR option, a ring-group failover.
+    session:execute("lua", string.format("extension.lua %s %s %d", domain, tostring(did), depth))
 
   elseif dtype == "ring_group" then
     session:execute("lua", string.format("ring_group.lua %s %s %d", domain, did, depth))

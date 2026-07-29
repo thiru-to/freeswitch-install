@@ -330,7 +330,55 @@ function M.dialplan(req, p)
     })))
   end
 
-  -- 2. Internal extension.
+  --[[ 1c. Call-handling feature codes.
+
+       Matched here rather than as data, because the code is fixed by convention: users learn
+       *72 once and expect it to mean forward-all everywhere. Making them configurable would
+       let a tenant shadow *97 or, worse, an emergency number.
+
+       Every one of these changes the CALLER's own settings, so the authenticated user is the
+       subject - a From: header cannot be allowed to nominate whose phone gets forwarded. ]]
+  local FEATURE_CODES = {
+    ["*78"] = "dnd_on",
+    ["*79"] = "dnd_off",
+    ["*73"] = "fwd_all_clear",
+    ["*91"] = "fwd_busy_clear",
+    ["*93"] = "fwd_na_clear",
+  }
+  -- The prefixed ones carry the target number in the rest of the digits.
+  local FEATURE_PREFIXES = {
+    ["*72"] = "fwd_all_set",
+    ["*90"] = "fwd_busy_set",
+    ["*92"] = "fwd_na_set",
+  }
+
+  local feature_action, feature_value = FEATURE_CODES[destination], nil
+  if not feature_action and #destination > 3 then
+    local prefix = destination:sub(1, 3)
+    if FEATURE_PREFIXES[prefix] then
+      feature_action = FEATURE_PREFIXES[prefix]
+      feature_value = destination:sub(4)
+    end
+  end
+
+  if feature_action then
+    local caller = p:getHeader("variable_sip_h_X-Auth-User") or p:getHeader("Caller-Username")
+    if not caller then
+      log("warning", "feature code %s from %s with no authenticated user - refusing",
+        destination, domain)
+      return document("dialplan", context_xml(context,
+        extension_xml("feature_denied", destination, { action("hangup", "CALL_REJECTED") })))
+    end
+    return document("dialplan", context_xml(context,
+      extension_xml("feature_code", destination, {
+        action("lua", string.format("feature_code.lua %s %s %s %s",
+          domain, caller, feature_action, feature_value or "")),
+      })))
+  end
+
+  --[[ 2. Internal extension. Handed to extension.lua rather than bridged from here, so DND,
+       call forwarding, call waiting and voicemail are decided in one place regardless of how
+       the call arrived - a colleague dialling, an inbound DID, an IVR option. ]]
   local ext = redis_get("voip:dir:" .. domain .. ":" .. destination)
   if ext then
     return document(
@@ -338,11 +386,7 @@ function M.dialplan(req, p)
       context_xml(
         context,
         extension_xml("internal", destination, {
-          action("set", "hangup_after_bridge=true"),
-          action("set", "continue_on_fail=true"),
-          action("bridge", string.format("user/%s@%s", destination, domain)),
-          action("answer", ""),
-          action("voicemail", string.format("default %s %s", domain, destination)),
+          action("lua", string.format("extension.lua %s %s", domain, destination)),
         })
       )
     )
@@ -354,8 +398,7 @@ function M.dialplan(req, p)
   local function destination_actions(dtype, did_id)
     local actions = {}
     if dtype == "extension" then
-      table.insert(actions, action("set", "hangup_after_bridge=true"))
-      table.insert(actions, action("bridge", string.format("user/%s@%s", did_id, domain)))
+      table.insert(actions, action("lua", string.format("extension.lua %s %s", domain, did_id)))
     elseif dtype == "ivr" then
       table.insert(actions, action("answer", ""))
       table.insert(actions, action("lua", string.format("ivr.lua %s %s", domain, did_id)))

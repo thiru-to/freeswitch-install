@@ -98,6 +98,13 @@ export type Extension = {
   codecPrefs: string | null;
   maxConcurrentCalls: number | null;
   deviceMac: string | null;
+  /** Per-user call handling. Users change these themselves with *78 / *72 and friends. */
+  dnd: boolean;
+  forwardAllTo: string | null;
+  forwardBusyTo: string | null;
+  forwardNoAnswerTo: string | null;
+  ringTimeoutSec: number | null;
+  callWaitingEnabled: boolean;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;

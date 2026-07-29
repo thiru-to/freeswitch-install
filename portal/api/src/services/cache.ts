@@ -123,6 +123,20 @@ export async function cacheExtension(extensionId: string): Promise<void> {
   const xml = renderDirectoryUser(ext, tenant, password, pin);
 
   await safeSet(keys.directory(tenant.sipDomain, ext.number), xml);
+  await safeSet(
+    keys.extensionCall(tenant.sipDomain, ext.number),
+    JSON.stringify({
+      number: ext.number,
+      displayName: ext.displayName,
+      dnd: ext.dnd,
+      forwardAllTo: ext.forwardAllTo,
+      forwardBusyTo: ext.forwardBusyTo,
+      forwardNoAnswerTo: ext.forwardNoAnswerTo,
+      ringTimeoutSec: ext.ringTimeoutSec ?? tenant.defaultRingTimeoutSec,
+      callWaitingEnabled: ext.callWaitingEnabled,
+      voicemailEnabled: ext.voicemailEnabled,
+    }),
+  );
   // Drop FreeSWITCH's own copy so the edit is visible on the next lookup rather than after
   // the cacheable TTL expires.
   await esl.flushXmlCache(ext.number, tenant.sipDomain);
@@ -133,7 +147,7 @@ export async function invalidateExtension(
   number: string,
   sipDomain: string,
 ): Promise<void> {
-  await safeDel(keys.directory(sipDomain, number));
+  await safeDel(keys.directory(sipDomain, number), keys.extensionCall(sipDomain, number));
   await esl.flushXmlCache(number, sipDomain);
 }
 

@@ -10,6 +10,7 @@ import { env } from "./env";
 import { cdrs } from "./routes/cdr";
 import { extensions } from "./routes/extensions";
 import { fsCdr } from "./routes/fs-cdr";
+import { fsFeature } from "./routes/fs-feature";
 import { fsXml } from "./routes/fs-xml";
 import { tenants } from "./routes/tenants";
 import { faxHook, faxes } from "./routes/fax";
@@ -76,6 +77,8 @@ app.route("/fs/xml", fsXml);
 app.route("/fs/fax", faxHook);
 // mod_xml_cdr posts here on hangup. Off the call path - the caller has already gone.
 app.route("/fs/cdr", fsCdr);
+// Feature codes dialled from a handset. Narrow by design - see the route.
+app.route("/fs/feature", fsFeature);
 
 app.route("/api/tenant", tenants);
 app.route("/api/extensions", extensions);

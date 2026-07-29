@@ -136,6 +136,9 @@ export const tenantSettings = pgTable(
     defaultCallerIdName: text("default_caller_id_name"),
     defaultCallerIdNumber: text("default_caller_id_number"),
 
+    /** How long an extension rings before no-answer treatment, unless it overrides this. */
+    defaultRingTimeoutSec: integer("default_ring_timeout_sec").default(25).notNull(),
+
     /**
      * E911 (Kari's Law): someone on site must be notified when 911 is dialled. Not optional
      * in the US. The notification fires from the ESL event handler.
@@ -247,6 +250,36 @@ export const extension = pgTable(
       () => emergencyLocation.id,
       { onDelete: "set null" },
     ),
+
+    /* --- Per-user call handling -------------------------------------------------------
+     *
+     * These are the settings a user changes themselves, from their phone, several times a
+     * day - so they are columns on the extension rather than a separate table, and they are
+     * pushed into the Redis directory entry so the dialplan reads them without a query.
+     */
+
+    /** Do not disturb. Calls go straight to the no-answer treatment without ringing. */
+    dnd: boolean("dnd").default(false).notNull(),
+
+    /**
+     * Unconditional forward. When set, nothing else applies - not DND, not the phone, not
+     * voicemail. A number rather than a destination reference: this is set from a handset by
+     * dialling *72 and a sequence of digits, so there is no way to name a ring group.
+     */
+    forwardAllTo: text("forward_all_to"),
+    /** Used when the extension is already on a call and call waiting is off. */
+    forwardBusyTo: text("forward_busy_to"),
+    /** Used when the phone rings out. Takes precedence over voicemail. */
+    forwardNoAnswerTo: text("forward_no_answer_to"),
+
+    /** Seconds to ring before no-answer treatment. Null inherits the tenant default. */
+    ringTimeoutSec: integer("ring_timeout_sec"),
+
+    /**
+     * Off means a second call gets busy treatment instead of a second ring. Handled here
+     * rather than on the handset so the busy forward and voicemail still apply.
+     */
+    callWaitingEnabled: boolean("call_waiting_enabled").default(true).notNull(),
 
     /** For MAC-based provisioning (roadmap R7). */
     deviceMac: text("device_mac"),

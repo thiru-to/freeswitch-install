@@ -12,6 +12,7 @@
  *   voip:did:<domain>:<number>   inbound DID destination, JSON
  *   voip:tenant:<domain>         tenant settings needed at call time, JSON
  *   voip:num:<domain>:<number>   internal feature number -> call-flow object, JSON
+ *   voip:call:<domain>:<number>  per-extension call handling (DND, forwarding), JSON
  *   voip:rg:<domain>:<id>        ring group with its members
  *   voip:ivr:<domain>:<id>       IVR menu with its options, keyed by digit
  *   voip:tc:<domain>:<id>        time condition with its rules
@@ -33,6 +34,16 @@ export const keys = {
    * and not a DID, so it falls through to the outbound routes and dies as UNALLOCATED_NUMBER.
    */
   featureNumber: (domain: string, number: string) => `voip:num:${domain}:${number}`,
+  /**
+   * How to treat a call TO this extension - DND, forwarding, ring time, call waiting.
+   *
+   * Separate from the directory entry because the two are read by different consumers asking
+   * different questions. The directory is rendered XML that FreeSWITCH's own user lookup
+   * consumes, and it describes the *caller* when they originate; this describes what to do
+   * when someone dials them. Making the dialplan parse XML out of the directory entry to find
+   * a DND flag would be a poor trade for one saved key.
+   */
+  extensionCall: (domain: string, number: string) => `voip:call:${domain}:${number}`,
   /** Call-flow objects, read by the Lua scripts mid-call. */
   ringGroup: (domain: string, id: string) => `voip:rg:${domain}:${id}`,
   ivr: (domain: string, id: string) => `voip:ivr:${domain}:${id}`,
@@ -49,6 +60,7 @@ export const keys = {
     `voip:dir:${domain}:*`,
     `voip:did:${domain}:*`,
     `voip:num:${domain}:*`,
+    `voip:call:${domain}:*`,
     `voip:rg:${domain}:*`,
     `voip:ivr:${domain}:*`,
     `voip:tc:${domain}:*`,

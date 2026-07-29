@@ -132,6 +132,12 @@ extensions.patch("/:id", async (c) => {
     /** Pass an empty string to have a new one generated - the reset-my-PIN case. */
     voicemailPin: string;
     voicemailEmail: string | null;
+    dnd: boolean;
+    forwardAllTo: string | null;
+    forwardBusyTo: string | null;
+    forwardNoAnswerTo: string | null;
+    ringTimeoutSec: number | null;
+    callWaitingEnabled: boolean;
     callerIdName: string | null;
     callerIdNumber: string | null;
     codecPrefs: string | null;
@@ -145,6 +151,24 @@ extensions.patch("/:id", async (c) => {
   if (body.displayName !== undefined) patch.displayName = body.displayName;
   if (body.voicemailEnabled !== undefined) patch.voicemailEnabled = body.voicemailEnabled;
   if (body.voicemailEmail !== undefined) patch.voicemailEmail = body.voicemailEmail;
+  if (body.dnd !== undefined) patch.dnd = body.dnd;
+  if (body.ringTimeoutSec !== undefined) patch.ringTimeoutSec = body.ringTimeoutSec;
+  if (body.callWaitingEnabled !== undefined) patch.callWaitingEnabled = body.callWaitingEnabled;
+
+  /* Forward targets are dialled, so they must stay diallable. The same rule is enforced on the
+     feature-code route; duplicated deliberately, because these are two independent entry points
+     and a value that reaches the dialplan unchecked ends up inside a bridge string. */
+  for (const field of ["forwardAllTo", "forwardBusyTo", "forwardNoAnswerTo"] as const) {
+    const value = body[field];
+    if (value === undefined) continue;
+    if (value === null || value === "") {
+      patch[field] = null;
+    } else if (/^[0-9*#+]{1,32}$/.test(value)) {
+      patch[field] = value;
+    } else {
+      return c.json({ error: `${field} must be diallable digits` }, 400);
+    }
+  }
   if (body.callerIdName !== undefined) patch.callerIdName = body.callerIdName;
   if (body.callerIdNumber !== undefined) patch.callerIdNumber = body.callerIdNumber;
   if (body.codecPrefs !== undefined) patch.codecPrefs = body.codecPrefs;

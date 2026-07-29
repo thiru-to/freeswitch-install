@@ -17,6 +17,7 @@ import {
   Title,
 } from "@mantine/core";
 import { endpoints, type Extension } from "../lib/api";
+import { CallHandlingModal } from "../components/CallHandlingModal";
 
 function CreateExtensionModal({
   opened,
@@ -128,6 +129,7 @@ function CreateExtensionModal({
 function Extensions() {
   const qc = useQueryClient();
   const [modalOpen, setModalOpen] = useState(false);
+  const [callHandling, setCallHandling] = useState<Extension | null>(null);
 
   const { data, isLoading, error } = useQuery<Extension[]>({
     queryKey: ["extensions"],
@@ -177,6 +179,7 @@ function Extensions() {
               <Table.Th>Number</Table.Th>
               <Table.Th>Name</Table.Th>
               <Table.Th>Voicemail</Table.Th>
+              <Table.Th>Call handling</Table.Th>
               <Table.Th>Status</Table.Th>
               <Table.Th />
             </Table.Tr>
@@ -196,6 +199,30 @@ function Extensions() {
                       off
                     </Text>
                   )}
+                </Table.Td>
+                <Table.Td>
+                  <Group gap={4}>
+                    {/* Only the states that change what happens to a call are badged. A row
+                        with nothing here behaves the ordinary way, which is most of them. */}
+                    {ext.dnd && (
+                      <Badge color="orange" variant="light" size="sm">
+                        DND
+                      </Badge>
+                    )}
+                    {ext.forwardAllTo && (
+                      <Badge color="grape" variant="light" size="sm">
+                        → {ext.forwardAllTo}
+                      </Badge>
+                    )}
+                    {!ext.callWaitingEnabled && (
+                      <Badge color="gray" variant="light" size="sm">
+                        no waiting
+                      </Badge>
+                    )}
+                    <Button size="compact-xs" variant="subtle" onClick={() => setCallHandling(ext)}>
+                      Edit
+                    </Button>
+                  </Group>
                 </Table.Td>
                 <Table.Td>
                   <Badge color={ext.enabled ? "green" : "gray"} variant="light">
@@ -218,6 +245,15 @@ function Extensions() {
       )}
 
       <CreateExtensionModal opened={modalOpen} onClose={() => setModalOpen(false)} />
+      {callHandling && (
+        // Keyed so switching rows resets the form rather than keeping the previous user's
+        // forwarding numbers in the fields.
+        <CallHandlingModal
+          key={callHandling.id}
+          extension={callHandling}
+          onClose={() => setCallHandling(null)}
+        />
+      )}
     </Stack>
   );
 }

@@ -17,6 +17,14 @@ type AuditInput = {
   entityId?: string;
   before?: unknown;
   after?: unknown;
+  /**
+   * For changes made without a user session - a feature code dialled from a handset, say.
+   * `userId` stays null in that case (there is no portal user), so this is the only record of
+   * who did it, and a change nobody remembers making is exactly the one that needs a name.
+   */
+  actor?: string;
+  /** Required when there is no tenant middleware to read it from. */
+  organizationId?: string;
 };
 
 /**
@@ -34,13 +42,23 @@ function redact(value: unknown): unknown {
   return out;
 }
 
-export async function recordAudit(c: Context<AppEnv>, input: AuditInput): Promise<void> {
+export async function recordAudit(
+  c: Context<AppEnv> | Context,
+  input: AuditInput,
+): Promise<void> {
   try {
+    /* A machine route has no tenant middleware, so `get` returns undefined there and the
+       explicit values are used instead. Typed loosely because a bare `Context` has no variable
+       map at all, and the alternative is threading a second function through every caller. */
+    const vars = c as Context<AppEnv>;
+    const organizationId = input.organizationId ?? vars.get("organizationId");
+    const userId = input.actor ? null : (vars.get("userId") ?? null);
+
     await db.insert(auditLog).values({
       id: randomUUID(),
-      organizationId: c.get("organizationId"),
-      userId: c.get("userId"),
-      action: input.action,
+      organizationId: organizationId ?? null,
+      userId,
+      action: input.actor ? `${input.action} (${input.actor})` : input.action,
       entityType: input.entityType,
       entityId: input.entityId ?? null,
       before: redact(input.before) ?? null,
