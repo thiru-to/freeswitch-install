@@ -81,6 +81,37 @@ else
   ok "Schema applied"
 fi
 
+### --- Columns for acc's db_extra ------------------------------------------------------------
+
+### OUTSIDE the schema guard above, deliberately. kamdbctl's acc table has only the standard
+### eight columns, but `modparam("acc", "db_extra", ...)` below names six more. Kamailio does
+### not validate that at startup - it builds the INSERT from the db_extra string, so every
+### accounted call fails with a column error at runtime, long after anyone is watching the
+### config load. Running this only on a fresh schema would leave every existing install broken,
+### which is the case that matters: these ALTERs are IF NOT EXISTS and cost nothing to re-run.
+###
+### Widths match the columns these mirror elsewhere in the schema, so a long From: user
+### truncates the same way everywhere rather than failing only in accounting.
+ACC_EXTRA_COLS="src_user VARCHAR(64)|src_domain VARCHAR(128)|dst_user VARCHAR(64)|dst_domain VARCHAR(128)|src_ip VARCHAR(64)|dialog_id VARCHAR(64)"
+
+acc_sql=""
+IFS='|' read -ra _cols <<< "$ACC_EXTRA_COLS"
+for col in "${_cols[@]}"; do
+  for tbl in acc missed_calls; do
+    acc_sql="${acc_sql}ALTER TABLE ${tbl} ADD COLUMN IF NOT EXISTS ${col} NOT NULL DEFAULT '';"
+  done
+done
+### Accounting is queried by time for reports and by callid when reconciling one call against
+### the FreeSWITCH CDR. Neither is indexed by the stock schema.
+acc_sql="${acc_sql}CREATE INDEX IF NOT EXISTS acc_time_idx ON acc (time);"
+acc_sql="${acc_sql}CREATE INDEX IF NOT EXISTS acc_callid_idx ON acc (callid);"
+
+if su - postgres -c "psql -v ON_ERROR_STOP=1 -q -d kamailio -c \"${acc_sql}\"" >/dev/null 2>&1; then
+  ok "Accounting columns present (acc, missed_calls)"
+else
+  die "Failed adding the acc db_extra columns - accounting would fail on every call."
+fi
+
 ### --- TLS ---------------------------------------------------------------------------------
 
 TLS_READY=0

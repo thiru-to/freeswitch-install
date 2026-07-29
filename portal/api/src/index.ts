@@ -7,7 +7,9 @@ import { Hono } from "hono";
 import { logger } from "hono/logger";
 import { auth } from "./auth";
 import { env } from "./env";
+import { cdrs } from "./routes/cdr";
 import { extensions } from "./routes/extensions";
+import { fsCdr } from "./routes/fs-cdr";
 import { fsXml } from "./routes/fs-xml";
 import { tenants } from "./routes/tenants";
 import { faxHook, faxes } from "./routes/fax";
@@ -72,6 +74,8 @@ app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 app.route("/fs/xml", fsXml);
 // fax_receive.lua reports completed receives here, with the same machine credential.
 app.route("/fs/fax", faxHook);
+// mod_xml_cdr posts here on hangup. Off the call path - the caller has already gone.
+app.route("/fs/cdr", fsCdr);
 
 app.route("/api/tenant", tenants);
 app.route("/api/extensions", extensions);
@@ -82,6 +86,7 @@ app.route("/api/outbound-routes", outboundRoutes);
 app.route("/api/ring-groups", ringGroups);
 app.route("/api/ivr-menus", ivrMenus);
 app.route("/api/time-conditions", timeConditions);
+app.route("/api/cdr", cdrs);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 

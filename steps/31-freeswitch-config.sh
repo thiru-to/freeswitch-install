@@ -25,12 +25,13 @@ config_ensure_secret FS_XML_GATEWAY_SECRET 32
 ###   mod_hiredis  - Lua cannot reach Redis; every call takes the slow path
 ###   mod_pgsql    - freeswitch.Dbh("pgsql://...") fails, so the Postgres fallback is dead
 ###   mod_spandsp  - fax silently does not answer
+###   mod_xml_cdr  - no call is ever recorded, and the loss is unrecoverable after the fact
 ### The install asserts each one loaded at the end rather than trusting the config.
 ### mod_xml_curl and mod_curl are DIFFERENT modules with confusingly similar names:
 ###   mod_xml_curl - the XML gateway; this is the fallback binding. Without it the whole
 ###                  fall-through tier is inert and a Redis miss resolves to nothing.
 ###   mod_curl     - an HTTP client for Lua and the dialplan. Not a fallback for anything.
-FS_AUTOLOAD_ADD="mod_opus mod_lua mod_hiredis mod_pgsql mod_spandsp mod_voicemail mod_curl mod_xml_curl"
+FS_AUTOLOAD_ADD="mod_opus mod_lua mod_hiredis mod_pgsql mod_spandsp mod_voicemail mod_curl mod_xml_curl mod_xml_cdr"
 
 ### --- Event socket -----------------------------------------------------------------------
 
@@ -441,6 +442,42 @@ if [ -f /usr/src/freeswitch/conf/vanilla/web-vm.tpl ] && [ ! -f "$CONF/web-vm.tp
   install -m 0644 -o freeswitch -g freeswitch \
     /usr/src/freeswitch/conf/vanilla/web-vm.tpl "$CONF/web-vm.tpl"
 fi
+
+### --- CDR ------------------------------------------------------------------------------------
+
+### mod_xml_cdr posts a record to the API when a channel hangs up. Off the call path entirely -
+### the caller has already gone - so unlike the XML gateway this is tuned for durability rather
+### than latency.
+###
+### log-b-leg stays at its default of false: the A leg's record already carries the bridged
+### leg's details, and logging both would mean two records per call for the ingest to reconcile.
+CDR_SPOOL="${CDR_SPOOL:-$PREFIX/log/xml_cdr}"
+install -d -m 0750 -o freeswitch -g freeswitch "$CDR_SPOOL"
+
+write_file "$CONF/autoload_configs/xml_cdr.conf.xml" 0640 freeswitch:freeswitch <<EOF || true
+<configuration name="xml_cdr.conf" description="XML CDR">
+  <!-- Managed by the VoIP PBX installer. -->
+  <settings>
+    <param name="url" value="${API_BASE_URL}/fs/cdr"/>
+    <param name="cred" value="fs:${FS_XML_GATEWAY_SECRET}"/>
+    <param name="auth-scheme" value="basic"/>
+
+    <!-- Raw text/xml rather than the default form-encoded body: one less encoding layer
+         between FreeSWITCH and the parser, and the ingest accepts either. -->
+    <param name="encode" value="textxml"/>
+
+    <!-- A CDR is a billing record, so a post that fails is kept rather than dropped. These
+         files are what a missing invoice line is reconstructed from, so nothing here is
+         cosmetic: err-log-dir without retries would spool records the API never rejected, and
+         retries without err-log-dir would lose them once the attempts ran out. -->
+    <param name="retries" value="4"/>
+    <param name="delay" value="5000"/>
+    <param name="err-log-dir" value="${CDR_SPOOL}"/>
+
+    <param name="timeout" value="10"/>
+  </settings>
+</configuration>
+EOF
 
 ### --- xml_curl, bound second ------------------------------------------------------------------
 

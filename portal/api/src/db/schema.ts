@@ -618,7 +618,12 @@ export const cdr = pgTable(
   },
   (table) => [
     index("cdr_org_started_idx").on(table.organizationId, table.startedAt),
-    index("cdr_call_uuid_idx").on(table.callUuid),
+    /**
+     * UNIQUE, and load-bearing rather than an optimisation. mod_xml_cdr retries a post it
+     * believes failed, so without this a slow or restarting API turns one call into several
+     * billing rows. The ingest relies on this constraint for its ON CONFLICT DO NOTHING.
+     */
+    uniqueIndex("cdr_call_uuid_idx").on(table.callUuid),
     index("cdr_extension_idx").on(table.extensionId),
   ],
 );
