@@ -1,20 +1,22 @@
 [Unit]
-Description=FreeSWITCH Telephony Platform
+Description=FreeSWITCH
 After=network-online.target
 Wants=network-online.target
 
 [Service]
 Type=forking
+PIDFile=${PREFIX}/run/freeswitch.pid
 User=freeswitch
 Group=freeswitch
+WorkingDirectory=${PREFIX}
 LimitCORE=infinity
 LimitNOFILE=100000
 LimitNPROC=60000
 LimitSTACK=250000
 LimitRTPRIO=infinity
 LimitRTTIME=7000000
-ExecStart=/usr/bin/freeswitch -ncwait -nonat
-ExecReload=/usr/bin/fs_cli -x reloadxml
+ExecStart=${PREFIX}/bin/freeswitch -ncwait -nonat
+ExecReload=${PREFIX}/bin/fs_cli -x reloadxml
 Restart=on-failure
 RestartSec=5
 

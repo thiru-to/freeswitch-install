@@ -18,7 +18,7 @@ sudo apt -y install \
   libpcre2-dev libspeexdsp-dev libspeex-dev libldns-dev libedit-dev \
   libssl-dev zlib1g-dev liblua5.2-dev libopus-dev libsndfile1-dev \
   libavformat-dev libswscale-dev libtool-bin libtiff-dev cmake uuid-dev \
-  libpq-dev libshout3-dev libmp3lame-dev libmpg123-dev nasm yasm \
+  libpq-dev libshout3-dev libmp3lame-dev libmpg123-dev \
   libhiredis-dev libmemcached-dev
 
 ### Clone repositories.
@@ -27,7 +27,14 @@ cd "$BUILD_DIR"
 [ -d "$BUILD_DIR/spandsp" ]    || sudo git clone https://github.com/freeswitch/spandsp.git
 [ -d "$BUILD_DIR/freeswitch" ] || sudo git clone -b "$FS_VERSION" https://github.com/signalwire/freeswitch.git
 [ -d "$BUILD_DIR/sofia-sip" ]  || sudo git clone https://github.com/freeswitch/sofia-sip.git
-[ -d "$BUILD_DIR/freeswitch-install" ] || sudo git clone https://github.com/thiru-to/freeswitch-install.git
+
+### resources/ (the systemd unit template) comes from this repo. Refresh it on re-runs so a
+### stale clone from an earlier install does not deploy an out-of-date unit file.
+if [ -d "$BUILD_DIR/freeswitch-install" ]; then
+  sudo git -C "$BUILD_DIR/freeswitch-install" pull --ff-only
+else
+  sudo git clone https://github.com/thiru-to/freeswitch-install.git
+fi
 
 ### Install spandsp
 cd "$BUILD_DIR/spandsp"
@@ -56,30 +63,51 @@ sudo ldconfig
 cd "$BUILD_DIR/freeswitch"
 sudo ./bootstrap.sh -j
 
-### Enable modules
-sudo sed -i 's|^#applications/mod_callcenter|applications/mod_callcenter|' modules.conf
-sudo sed -i 's|^#applications/mod_cidlookup|applications/mod_cidlookup|' modules.conf
-sudo sed -i 's|^#applications/mod_memcache|applications/mod_memcache|' modules.conf
-sudo sed -i 's|^#applications/mod_hiredis|applications/mod_hiredis|' modules.conf
-sudo sed -i 's|^#applications/mod_curl|applications/mod_curl|' modules.conf
-sudo sed -i 's|^#applications/mod_easyroute|applications/mod_easyroute|' modules.conf
-sudo sed -i 's|^#applications/mod_nibblebill|applications/mod_nibblebill|' modules.conf
-sudo sed -i 's|^#event_handlers/mod_fail2ban|event_handlers/mod_fail2ban|' modules.conf
-sudo sed -i 's|^#formats/mod_shout|formats/mod_shout|' modules.conf
-sudo sed -i 's|^#formats/mod_pgsql|formats/mod_pgsql|' modules.conf
-sudo sed -i 's|^#xml_int/mod_xml_curl|xml_int/mod_xml_curl|' modules.conf
+### Modules to build, over and above the stock modules.conf selection. The path prefixes must
+### match build/modules.conf.in exactly or the sed silently does nothing, so each edit is
+### verified below.
+FS_ENABLE_MODULES="
+applications/mod_callcenter
+applications/mod_cidlookup
+applications/mod_memcache
+applications/mod_hiredis
+applications/mod_curl
+applications/mod_easyroute
+applications/mod_nibblebill
+event_handlers/mod_fail2ban
+formats/mod_shout
+databases/mod_pgsql
+xml_int/mod_xml_curl
+"
 
-### Disable modules
-sudo sed -i 's|^applications/mod_signalwire|#applications/mod_signalwire|' modules.conf
-sudo sed -i 's|^endpoints/mod_skinny|#endpoints/mod_skinny|' modules.conf
-sudo sed -i 's|^endpoints/mod_verto|#endpoints/mod_verto|' modules.conf
-sudo sed -i 's|^applications/mod_say_es|#applications/mod_say_es|' modules.conf
-sudo sed -i 's|^applications/mod_say_fr|#applications/mod_say_fr|' modules.conf
-sudo sed -i 's|^applications/mod_av|#applications/mod_av|' modules.conf
-sudo sed -i 's|^xml_int/mod_xml_rpc|#xml_int/mod_xml_rpc|' modules.conf
+FS_DISABLE_MODULES="
+applications/mod_signalwire
+applications/mod_av
+endpoints/mod_skinny
+endpoints/mod_verto
+say/mod_say_es
+say/mod_say_fr
+xml_int/mod_xml_rpc
+"
+
+for m in $FS_ENABLE_MODULES; do
+  if ! grep -qE "^#?${m}\$" modules.conf; then
+    echo "ERROR: '$m' not found in modules.conf - the module path changed upstream" >&2
+    exit 1
+  fi
+  sudo sed -i "s|^#${m}\$|${m}|" modules.conf
+done
+
+for m in $FS_DISABLE_MODULES; do
+  if ! grep -qE "^#?${m}\$" modules.conf; then
+    echo "ERROR: '$m' not found in modules.conf - the module path changed upstream" >&2
+    exit 1
+  fi
+  sudo sed -i "s|^${m}\$|#${m}|" modules.conf
+done
 
 sudo ./configure -C \
-  --disable-dependency-tracking --enable-debug --enable-core-pgsql-support --with-openssl
+  --disable-dependency-tracking --enable-debug --enable-core-pgsql-support
 
 sudo make -j"$JOBS"
 sudo make install
@@ -87,6 +115,17 @@ sudo make install
 ### Install freeswitch sounds
 sudo make sounds-install moh-install
 sudo make cd-sounds-install cd-moh-install
+
+### Replace the stock vanilla config with the minimal one. 'make install' only lays down a
+### config when $PREFIX/conf is absent, and 'config-minimal' will not overwrite existing
+### files, so the old tree has to go first.
+sudo rm -rf "$PREFIX/conf"
+sudo make config-minimal
+
+if [ ! -f "$PREFIX/conf/freeswitch.xml" ]; then
+  echo "ERROR: $PREFIX/conf/freeswitch.xml is missing - 'make config-minimal' did not complete" >&2
+  exit 1
+fi
 
 ### Create freeswitch group & user and give permissions.
 getent group freeswitch >/dev/null || sudo groupadd freeswitch
@@ -114,16 +153,19 @@ for u in $FS_ADMINS; do
   echo "Added '$u' to the freeswitch group"
 done
 
+sudo ln -sf "$PREFIX/bin/fs_cli" /usr/bin/fs_cli
+sudo ln -sf "$PREFIX/bin/freeswitch" /usr/sbin/freeswitch
 
+### FreeSWITCH runs as the freeswitch user and writes to db/, log/, run/ and recordings/
+### underneath the prefix, so the whole tree has to be owned by it.
+sudo chown -R freeswitch:freeswitch "$PREFIX"
+sudo chmod -R u+rwX,g+rwX,o-rwx "$PREFIX/conf" "$PREFIX/db" "$PREFIX/log"
 
-sudo cp -r /usr/local/freeswitch/conf /etc/freeswitch 
-sudo cp /usr/local/freeswitch/bin/fs_cli /usr/bin/fs_cli 
-sudo cp /usr/local/freeswitch/bin/freeswitch /usr/bin/freeswitch
+### Conventional location for the config, for anyone who goes looking in /etc.
+sudo ln -sfn "$PREFIX/conf" /etc/freeswitch
 
-sudo chown -R freeswitch:freeswitch /etc/freeswitch
-
-if [ ! -x "/usr/bin/freeswitch" ]; then
-  echo "ERROR: /usr/bin/freeswitch is missing - 'make install' did not complete" >&2
+if [ ! -x "$PREFIX/bin/freeswitch" ]; then
+  echo "ERROR: $PREFIX/bin/freeswitch is missing - 'make install' did not complete" >&2
   exit 1
 fi
 
@@ -133,9 +175,12 @@ sudo sed "s|\${PREFIX}|$PREFIX|g" "$BUILD_DIR/freeswitch-install/resources/frees
 
 sudo systemctl daemon-reload
 sudo systemctl enable freeswitch.service
-
+sudo systemctl start freeswitch.service
 
 echo
-echo "FreeSWITCH installed.
-
-
+echo "FreeSWITCH $FS_VERSION installed to $PREFIX."
+echo "  status : sudo systemctl status freeswitch"
+echo "  console: fs_cli"
+echo "  config : $PREFIX/conf (also linked as /etc/freeswitch)"
+echo
+echo "Members of the freeswitch group must log out and back in for it to take effect."
