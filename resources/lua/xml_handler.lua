@@ -313,31 +313,48 @@ function M.dialplan(req, p)
     )
   end
 
-  -- 3. Inbound DID.
-  local did = json_decode(redis_get("voip:did:" .. domain .. ":" .. destination))
-  if did then
+  --[[ 3. A stored destination - reached either by an inbound DID or by dialling a feature
+       number internally. Both resolve to the same {type, id} pair, so they share one action
+       builder; the call-time scripts in voip.lua handle everything past the first hop. ]]
+  local function destination_actions(dtype, did_id)
     local actions = {}
-    if did.destinationType == "extension" then
+    if dtype == "extension" then
       table.insert(actions, action("set", "hangup_after_bridge=true"))
-      table.insert(actions, action("bridge", string.format("user/%s@%s", did.destinationId, domain)))
-    elseif did.destinationType == "ivr" then
+      table.insert(actions, action("bridge", string.format("user/%s@%s", did_id, domain)))
+    elseif dtype == "ivr" then
       table.insert(actions, action("answer", ""))
-      table.insert(actions, action("lua", string.format("ivr.lua %s %s", domain, did.destinationId)))
-    elseif did.destinationType == "ring_group" then
-      table.insert(actions, action("lua", string.format("ring_group.lua %s %s", domain, did.destinationId)))
-    elseif did.destinationType == "time_condition" then
-      table.insert(actions, action("lua", string.format("time_condition.lua %s %s", domain, did.destinationId)))
-    elseif did.destinationType == "fax" then
+      table.insert(actions, action("lua", string.format("ivr.lua %s %s", domain, did_id)))
+    elseif dtype == "ring_group" then
+      table.insert(actions, action("lua", string.format("ring_group.lua %s %s", domain, did_id)))
+    elseif dtype == "time_condition" then
+      table.insert(actions, action("lua", string.format("time_condition.lua %s %s", domain, did_id)))
+    elseif dtype == "fax" then
       table.insert(actions, action("answer", ""))
       table.insert(actions, action("playback", "silence_stream://2000"))
       table.insert(actions, action("lua", string.format("fax_receive.lua %s %s", domain, destination)))
-    elseif did.destinationType == "voicemail" then
+    elseif dtype == "voicemail" then
       table.insert(actions, action("answer", ""))
-      table.insert(actions, action("voicemail", string.format("default %s %s", domain, did.destinationId)))
+      table.insert(actions, action("voicemail", string.format("default %s %s", domain, did_id)))
     else
       table.insert(actions, action("hangup", "UNALLOCATED_NUMBER"))
     end
-    return document("dialplan", context_xml(context, extension_xml("did", destination, actions)))
+    return actions
+  end
+
+  local did = json_decode(redis_get("voip:did:" .. domain .. ":" .. destination))
+  if did then
+    return document("dialplan", context_xml(context,
+      extension_xml("did", destination, destination_actions(did.destinationType, did.destinationId))))
+  end
+
+  --[[ 3b. Feature number: the ring group or auto-attendant dialled from a desk phone inside
+       the tenant. Checked after the directory so an extension always wins a number collision -
+       a user who cannot be reached on their own extension is a worse failure than a ring group
+       that needs renumbering. ]]
+  local feature = json_decode(redis_get("voip:num:" .. domain .. ":" .. destination))
+  if feature then
+    return document("dialplan", context_xml(context,
+      extension_xml("feature", destination, destination_actions(feature.type, feature.id))))
   end
 
   -- 4. Outbound. Non-emergency routes were already skipped above.

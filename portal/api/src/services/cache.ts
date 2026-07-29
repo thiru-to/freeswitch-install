@@ -33,7 +33,7 @@ import {
 } from "../db/schema";
 import { decrypt } from "../lib/crypto";
 import { esl } from "./esl";
-import { keys, safeDel, safeSet } from "./redis";
+import { keys, safeDel, safeDelPattern, safeSet } from "./redis";
 
 /* ---------------------------------------------------------------------------------------
  * Directory
@@ -291,7 +291,26 @@ export async function cacheRingGroups(organizationId: string): Promise<void> {
           .map((m) => ({ number: m.number, delaySec: m.delaySec })),
       }),
     );
+
+    await cacheFeatureNumber(tenant.sipDomain, group.number, "ring_group", group.id);
   }
+}
+
+/**
+ * Makes a call-flow object reachable by dialling its number from inside the tenant.
+ *
+ * Deliberately a separate small key rather than folding the number into the object: the
+ * dialplan lookup starts from a dialled string and has no id to work with, so it needs an
+ * index in that direction.
+ */
+async function cacheFeatureNumber(
+  domain: string,
+  number: string | null,
+  type: string,
+  id: string,
+): Promise<void> {
+  if (!number) return;
+  await safeSet(keys.featureNumber(domain, number), JSON.stringify({ type, id }));
 }
 
 export async function cacheIvrMenus(organizationId: string): Promise<void> {
@@ -326,6 +345,8 @@ export async function cacheIvrMenus(organizationId: string): Promise<void> {
         ),
       }),
     );
+
+    await cacheFeatureNumber(tenant.sipDomain, menu.number, "ivr", menu.id);
   }
 }
 
@@ -362,8 +383,25 @@ export async function cacheTimeConditions(organizationId: string): Promise<void>
 /**
  * Rebuilds everything for one tenant. Used on provisioning, after a bulk import, and as the
  * repair action when the cache is suspected stale.
+ *
+ * Purges first, because the individual cache builders only ever SET. Without the purge a
+ * deleted ring group keeps answering, and a ring group renumbered from 600 to 610 answers on
+ * both - the sort of ghost that survives every subsequent rebuild and is diagnosed by nobody.
+ *
+ * The gap between purge and repopulate is deliberate and safe: a lookup landing in it misses
+ * Redis and falls through to mod_xml_curl, which serves the same answer from Postgres. Slower
+ * for a few milliseconds, never wrong.
  */
 export async function rebuildTenant(organizationId: string): Promise<void> {
+  const existing = await db.query.tenantSettings.findFirst({
+    where: eq(tenantSettings.organizationId, organizationId),
+  });
+  if (existing) {
+    for (const pattern of keys.tenantPatterns(existing.sipDomain)) {
+      await safeDelPattern(pattern);
+    }
+  }
+
   await cacheTenantSettings(organizationId);
   await cacheRouteTable(organizationId);
   await cacheInboundRoutes(organizationId);

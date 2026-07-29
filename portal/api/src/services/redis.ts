@@ -11,6 +11,7 @@
  *   voip:routes:<domain>         the tenant's outbound route table, JSON
  *   voip:did:<domain>:<number>   inbound DID destination, JSON
  *   voip:tenant:<domain>         tenant settings needed at call time, JSON
+ *   voip:num:<domain>:<number>   internal feature number -> call-flow object, JSON
  *   voip:rg:<domain>:<id>        ring group with its members
  *   voip:ivr:<domain>:<id>       IVR menu with its options, keyed by digit
  *   voip:tc:<domain>:<id>        time condition with its rules
@@ -25,13 +26,64 @@ export const keys = {
   routes: (domain: string) => `voip:routes:${domain}`,
   did: (domain: string, number: string) => `voip:did:${domain}:${number}`,
   tenant: (domain: string) => `voip:tenant:${domain}`,
+  /**
+   * Internal feature number -> call-flow object. Users expect to dial 600 for the sales ring
+   * group or 700 for the auto-attendant from their own desk phone, exactly as they would dial
+   * a colleague's extension. Without this map an internally dialled 600 is not an extension
+   * and not a DID, so it falls through to the outbound routes and dies as UNALLOCATED_NUMBER.
+   */
+  featureNumber: (domain: string, number: string) => `voip:num:${domain}:${number}`,
   /** Call-flow objects, read by the Lua scripts mid-call. */
   ringGroup: (domain: string, id: string) => `voip:rg:${domain}:${id}`,
   ivr: (domain: string, id: string) => `voip:ivr:${domain}:${id}`,
   timeCondition: (domain: string, id: string) => `voip:tc:${domain}:${id}`,
-  /** Prefix used when clearing everything for one tenant. */
-  tenantPrefix: (domain: string) => `voip:*:${domain}*`,
+  /**
+   * Every per-tenant key pattern, for a full purge before a rebuild.
+   *
+   * Enumerated rather than globbed as `voip:*:<domain>*`, because that trailing wildcard would
+   * also match a tenant whose domain merely starts with this one - `acme.test` would wipe
+   * `acme.test.evil.com`. A colon-terminated prefix cannot straddle a domain boundary, and any
+   * new key shape must be added here or it will survive a rebuild as a ghost.
+   */
+  tenantPatterns: (domain: string) => [
+    `voip:dir:${domain}:*`,
+    `voip:did:${domain}:*`,
+    `voip:num:${domain}:*`,
+    `voip:rg:${domain}:*`,
+    `voip:ivr:${domain}:*`,
+    `voip:tc:${domain}:*`,
+    `voip:routes:${domain}`,
+    `voip:tenant:${domain}`,
+  ],
 } as const;
+
+/**
+ * Deletes every key matching a pattern, via SCAN rather than KEYS.
+ *
+ * KEYS blocks the whole server for the length of the scan, and this Redis is on the call path -
+ * a config change in the portal must never stall call setup for another tenant.
+ */
+export async function safeDelPattern(pattern: string): Promise<number> {
+  let cursor = "0";
+  let deleted = 0;
+  try {
+    do {
+      const reply = (await redis.send("SCAN", [cursor, "MATCH", pattern, "COUNT", "200"])) as [
+        string,
+        string[],
+      ];
+      cursor = reply[0];
+      const batch = reply[1];
+      if (batch.length > 0) {
+        await redis.del(...batch);
+        deleted += batch.length;
+      }
+    } while (cursor !== "0");
+  } catch (err) {
+    console.error(`[redis] scan-delete ${pattern} failed:`, (err as Error).message);
+  }
+  return deleted;
+}
 
 /**
  * Redis is on the call path via Lua, but the API's own writes are not. A failed cache write
