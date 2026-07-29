@@ -44,12 +44,19 @@ Assertions worth making afterwards — each of these has caught a real bug:
 - **zero `[ERR]`/`[CRIT]` in `$PREFIX/log/freeswitch.log`** — a successful build does not imply a clean boot
 - re-running the script over the finished install exits 0 again (it is meant to be idempotent)
 
-Caveat: on Apple Silicon this exercises arm64, not the x86_64 the servers run.
+**Architecture caveat — this has already caused a production failure.** On Apple Silicon the container is arm64; the servers are x86_64 (Google Cloud C4). An arm64 pass is not a general pass. The concrete case: libvpx needs an external assembler (yasm/nasm) for its SSE/AVX paths on x86_64, but uses NEON intrinsics via gcc on arm64 and never asks — so a missing assembler is *completely invisible* on arm64 and fails the build on a real server. Any change touching apt dependencies or `./configure` flags should be re-run on amd64:
+
+```sh
+docker run -d --platform linux/amd64 ... # same recipe, ~5x slower under emulation
+```
+
+Known limitation of the emulated amd64 container: **its systemd is broken** — journald, sysusers, sysctl and tmp.mount all fail, and `systemd-run /bin/sleep 300` fails too. So an amd64 run verifies the *build* (dependencies, configure flags, modules) but cannot verify the service. Start FreeSWITCH manually there (`sudo -u freeswitch $PREFIX/bin/freeswitch -ncwait -nonat`) to check runtime behaviour, and rely on the arm64 container for the systemd unit. Kill leftover instances between manual runs or the log fills with spurious `Could not listen` / `Error Creating SIP UA` port conflicts.
 
 ## Modules and dependencies
 
 - The module selection (`FS_ENABLE_MODULES` / `FS_DISABLE_MODULES`) is the intent-carrying part of the script: it enables mod_callcenter, mod_cidlookup, mod_hiredis, mod_curl, mod_shout, mod_pgsql, mod_easyroute, mod_nibblebill, mod_fail2ban, mod_xml_curl and disables mod_skinny, mod_verto, mod_say_es, mod_say_fr, mod_av, mod_xml_rpc, mod_signalwire. Preserve this set unless asked to change it. Do not re-enable mod_v8 — it needs libv8-6.1-dev, gone from modern Ubuntu/Debian.
 - Caching is Redis, via mod_hiredis. mod_memcache was deliberately removed (2026-07-29) — do not reintroduce it or `libmemcached-dev`.
+- **This is a voice-only switch: video is off via `--disable-libvpx`.** FreeSWITCH otherwise builds `libs/libvpx` unconditionally (`enable_libvpx="yes"`), and on x86_64 that needs yasm/nasm. Disabling it is preferred over adding those assemblers — VP8/VP9 are dead weight here. It is safe: the core gates video on `SWITCH_HAVE_VPX`, mod_av is disabled, and mod_video_filter is off by default. If you ever re-enable video you must add `nasm yasm` to the apt list or x86_64 builds fail.
 - Every enabled module needs its dev library in the apt list or the build dies mid-`make` (mod_hiredis → libhiredis-dev, mod_shout → libshout3-dev/libmpg123-dev/libmp3lame-dev). The module-path guard does **not** catch a missing dev lib — only a real build does. That is how the mod_memcache/libmemcached-dev mismatch surfaced.
 - v1.11.1's `configure.ac` needs PCRE2 only (`PKG_CHECK_MODULES([PCRE2], [libpcre2-8 >= 10.00])`). `libpcre3-dev` is not required and was dropped deliberately — it is also gone from Debian 13, where it would fail the whole apt transaction.
 - Module paths must match `build/modules.conf.in` exactly or the `sed` silently no-ops and the module keeps its default state. The non-obvious ones: `databases/mod_pgsql` (not formats/) and `say/mod_say_es` + `say/mod_say_fr` (not applications/). The script greps each entry first and aborts if a path moved upstream — keep that guard.
@@ -77,4 +84,7 @@ Caveat: on Apple Silicon this exercises arm64, not the x86_64 the servers run.
 
 - spandsp, libks and sofia-sip must be built and installed (plus `ldconfig`) before FreeSWITCH's `./configure`. The script uses `set -euo pipefail`, and the clone/user-creation steps are guarded so re-running after a failure resumes cleanly.
 - The `adduser` flags are chosen for Ubuntu 22.04's older adduser: use `--gecos` (not `--comment`) and keep the username last.
-- Last verified end-to-end on 2026-07-29: fresh Debian 13.6 / systemd 257 (privileged container, arm64), tag v1.11.1 — exits 0 in ~120s, intended modules built and excluded ones absent, only the 8000/48000 sound rates present, mod_opus loaded and listed by `show codec`, service active with MainPID matching the pidfile, zero `[ERR]`/`[CRIT]`, clean stop/start cycle, and a second run over the finished install exits 0 (~30s). Not re-verified on x86_64 or Ubuntu 22.04 since these changes.
+- Last verified 2026-07-29 on Debian 13.6 / systemd 257, tag v1.11.1, both architectures:
+  - **arm64 (native)** — exits 0 in ~120s, intended modules built and excluded ones absent, only the 8000/48000 sound rates present, mod_opus loaded and listed by `show codec`, `make` never enters `libs/libvpx`, service active with MainPID matching the pidfile, zero `[ERR]`/`[CRIT]`, clean stop/start, and a second run over the finished install exits 0 (~30s).
+  - **x86_64 (emulated)** — full build succeeds in ~670s with no yasm/nasm error and libvpx never entered; started manually, FreeSWITCH reports ready with Opus present and no VP8/VP9/H264. The service could not be verified here (broken systemd in the emulated container, see above).
+  - Not verified on Ubuntu 22.04 since these changes.

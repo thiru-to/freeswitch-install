@@ -105,8 +105,16 @@ for m in $FS_DISABLE_MODULES; do
   sudo sed -i "s|^${m}\$|#${m}|" modules.conf
 done
 
+### --disable-libvpx: this is a voice-only switch, so we do not build the VP8/VP9 video
+### codecs. Besides dropping dead weight, it avoids libvpx's external assembler requirement
+### (yasm/nasm) on x86_64 - without it the build fails at "Neither yasm nor nasm have been
+### found". libvpx is otherwise built unconditionally, and the arm64 build never needs the
+### assembler, so that failure only shows up on x86_64 servers.
+### Video is gated on SWITCH_HAVE_VPX in the core, mod_av is disabled above, and
+### mod_video_filter is off by default, so nothing here expects video to be present.
 sudo ./configure -C \
-  --disable-dependency-tracking --enable-debug --enable-core-pgsql-support
+  --disable-dependency-tracking --enable-debug --enable-core-pgsql-support \
+  --disable-libvpx
 
 sudo make -j"$JOBS"
 sudo make install
