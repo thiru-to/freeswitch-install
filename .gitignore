@@ -1,0 +1,14 @@
+# Dependencies are rebuilt from the lockfile on the target by 41-api-deploy.sh.
+# Committing them would also ship platform-specific binaries (esbuild, etc.) built for a
+# developer's macOS into a Linux server.
+node_modules/
+
+# Real site configuration and secrets. Only the template belongs in git.
+config.env
+*.env
+!.env.example
+
+# Backups left behind by lib/common.sh write_file
+*.bak-*
+
+.DS_Store

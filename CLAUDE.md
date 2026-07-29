@@ -4,12 +4,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repository is
 
-A FreeSWITCH source-build installer for Debian/Ubuntu servers. There is no application code, build system, or test suite — just a bash script and the assets it deploys:
+An installer for a full VoIP PBX stack on Debian 13: Kamailio (public SIP edge) in front of FreeSWITCH (media/PBX core), with rtpengine, PostgreSQL, Redis and a Bun/Hono API. There is no test suite — it is bash plus the assets it deploys.
 
-- `install.sh` — the entire installer. Takes an optional FreeSWITCH git tag as `$1` (defaults to `v1.11.1`; the tag must exist in signalwire/freeswitch — check with `git ls-remote --tags`). It installs apt dependencies, clones and builds spandsp, libks, sofia-sip and FreeSWITCH under `/usr/src`, selects modules, installs to `/usr/local/freeswitch`, swaps in the minimal config, creates the `freeswitch` user/group, and installs a systemd unit.
-- `resources/freeswitch.service` — systemd unit template. The script substitutes the literal `${PREFIX}` placeholder with sed when deploying it (systemd does not expand shell variables), so keep the placeholder intact in the repo copy.
+- `install.sh` — master installer. Runs `steps/*.sh` in order. Idempotent: each step's marker in `/var/lib/voip-install/` holds the SHA-256 of the script that satisfied it, so a step re-runs automatically when its script changes. Flags: `--list`, `--only`, `--from`, `--force`, `--dry-run`. Logs to `/var/log/voip-install/`.
+- `lib/common.sh` — shared helpers, sourced by every step. `apt_install` only installs what is missing; `write_file` writes from stdin and returns 1 when the content was already correct (so callers can skip a reload); `config_ensure_secret` generates a secret once and persists it.
+- `config.env.example` → `/etc/voip-pbx/config.env` (0600). Site config plus generated secrets. **Never rotate a secret on re-run** — every service already holds the old value.
+- `steps/` — the numbered step scripts. The number encodes ordering; dependencies flow downwards.
+- `resources/freeswitch.service` — systemd unit template. `${PREFIX}` is substituted by sed at deploy time (systemd does not expand shell variables), so keep the placeholder intact.
 
-**Changes must be pushed to `main` before they affect a server install.** The script clones `https://github.com/thiru-to/freeswitch-install.git` on the target machine to obtain `resources/`, and on re-runs does `git pull --ff-only` on that clone. A local edit that has not been pushed will not be used.
+Steps read their configuration from `/etc/voip-pbx/config.env` via `load_config`, and reference repo files through `$REPO_DIR` (set by `lib/common.sh`). Earlier versions cloned this repo onto the target to find `resources/`, which meant a local edit did nothing until pushed — that is gone; the local checkout is used directly.
+
+### Topology this assumes
+
+Kamailio owns the public SIP ports (5060/5061) and does registration, auth and flood control. FreeSWITCH listens only on `127.0.0.1:5080` and trusts what Kamailio forwards (`auth-calls=false` paired with a loopback-only ACL — the pairing is what makes it safe, so do not change one without the other). rtpengine relays all media; FreeSWITCH NAT handling is deliberately off so the two do not both rewrite SDP.
 
 ## Validating changes
 
@@ -52,7 +59,15 @@ docker run -d --platform linux/amd64 ... # same recipe, ~5x slower under emulati
 
 Known limitation of the emulated amd64 container: **its systemd is broken** — journald, sysusers, sysctl and tmp.mount all fail, and `systemd-run /bin/sleep 300` fails too. So an amd64 run verifies the *build* (dependencies, configure flags, modules) but cannot verify the service. Start FreeSWITCH manually there (`sudo -u freeswitch $PREFIX/bin/freeswitch -ncwait -nonat`) to check runtime behaviour, and rely on the arm64 container for the systemd unit. Kill leftover instances between manual runs or the log fills with spurious `Could not listen` / `Error Creating SIP UA` port conflicts.
 
-## Modules and dependencies
+## Things to know when editing the step scripts
+
+- Adding a step means adding it to the `STEPS` array in `install.sh` *and* creating `steps/<name>`. A step listed with no file warns and is skipped rather than failing the run, so the installer stays usable while the set is incomplete.
+- Steps must be safe to re-run. Use the `lib/common.sh` helpers rather than raw `apt-get` / `cat >` — that is what makes a second run quiet instead of noisy and destructive.
+- **Do not lock "other" out of `/usr/local/freeswitch`.** Anyone with sudo can read it anyway, so `o-rwx` adds no protection and only breaks routine inspection (this was a real bug: admins got permission denied everywhere). Writes are restricted through the `freeswitch` group; config dirs are setgid so admin-created files stay group-readable by the service.
+- `31-freeswitch-config.sh` binds ESL to `127.0.0.1` with a generated password. The stock config listens on `::`, which fails outright on IPv6-less hosts and is far too open where it does work.
+- `33-kamailio-config.sh` writes a deliberately conservative routing config — register, authenticate, protect, relay. Number translation, outbound trunking and billing are business logic and are intentionally absent.
+
+## Modules and dependencies (30-freeswitch.sh)
 
 - The module selection (`FS_ENABLE_MODULES` / `FS_DISABLE_MODULES`) is the intent-carrying part of the script: it enables mod_callcenter, mod_cidlookup, mod_hiredis, mod_curl, mod_shout, mod_pgsql, mod_easyroute, mod_nibblebill, mod_fail2ban, mod_xml_curl and disables mod_skinny, mod_verto, mod_say_es, mod_say_fr, mod_av, mod_xml_rpc, mod_signalwire. Preserve this set unless asked to change it. Do not re-enable mod_v8 — it needs libv8-6.1-dev, gone from modern Ubuntu/Debian.
 - Caching is Redis, via mod_hiredis. mod_memcache was deliberately removed (2026-07-29) — do not reintroduce it or `libmemcached-dev`.

@@ -1,118 +1,140 @@
-# FreeSWITCH Installer for Debian/Ubuntu
+# VoIP PBX installer
 
-A work-in-progress automation script for installing and running FreeSWITCH from source on Debian and Ubuntu servers.
+Builds a production VoIP PBX on a fresh Debian 13 server: Kamailio as the public SIP edge,
+FreeSWITCH as the media/PBX core behind it, rtpengine for media relay, PostgreSQL and Redis
+for state, and a Bun/Hono API.
 
-This repository provides a simple bash-based installer that sets up a production-ready FreeSWITCH build, configures a systemd service, and prepares the environment needed to run the softswitch locally or on a server.
+## Layout
 
-## Overview
+```
+install.sh              master installer - runs the steps in order
+config.env.example      site configuration template
+lib/common.sh           shared helpers (logging, idempotency, apt, files, services)
+steps/                  the numbered step scripts
+resources/              systemd unit templates
+app/api/                the Hono API source
+```
 
-The project currently focuses on one primary goal:
+## Quick start
 
-- automate the installation of FreeSWITCH from source
-- build the required dependencies and modules
-- install FreeSWITCH under /usr/local/freeswitch
-- register it as a systemd service
-- create the necessary system user and permissions
+```bash
+git clone https://github.com/thiru-to/freeswitch-install.git
+cd freeswitch-install
 
-This repo is still evolving, and more features and refinements will be added over time.
+# The first run creates /etc/voip-pbx/config.env and stops so you can fill it in.
+sudo ./install.sh
 
-## What the installer does
+sudo editor /etc/voip-pbx/config.env    # PBX_FQDN, LETSENCRYPT_EMAIL, ADMIN_ALLOW_CIDR
+sudo ./install.sh
+```
 
-The current installer script performs the following steps:
-
-1. Updates and upgrades the base system packages
-2. Installs the required build and runtime dependencies
-3. Clones the needed repositories for:
-   - spandsp
-   - libks
-   - sofia-sip
-   - FreeSWITCH
-4. Builds and installs the supporting libraries
-5. Configures FreeSWITCH module selection
-6. Builds and installs FreeSWITCH to /usr/local/freeswitch
-7. Installs FreeSWITCH sound packages
-8. Creates the freeswitch system user and group, and adds the invoking user and any
-   sudo-capable users to the freeswitch group
-9. Installs a systemd service definition for FreeSWITCH
-
-## Current supported environment
-
-This installer is intended for:
-
-- Debian or Ubuntu servers
-- systems using systemd
-- environments with sudo access
-- fresh or lightly configured servers
-
-It has been validated on Ubuntu 22.04 in a systemd-based environment.
-
-## Requirements
-
-Before running the installer, ensure that:
-
-- the host is running Debian or Ubuntu
-- you have sudo privileges
-- the server has internet access to pull source code and packages
-- systemd is available
+`PBX_FQDN` must already resolve to this server's public IP — Let's Encrypt validates over
+HTTP, and `00-preflight.sh` warns if it does not.
 
 ## Usage
 
-Run the installer directly from the repository root:
-
 ```bash
-bash install.sh
+sudo ./install.sh                            # run everything still pending
+sudo ./install.sh --list                     # show the plan and each step's state
+sudo ./install.sh --only 30-freeswitch.sh    # run one step
+sudo ./install.sh --from 40-bun.sh           # resume from a step
+sudo ./install.sh --force                    # re-run everything
+sudo ./install.sh --dry-run                  # show what would run
 ```
 
-You can optionally specify a FreeSWITCH tag to build:
+Re-running is safe. Each step records the SHA-256 of the script that satisfied it, so a
+completed step is skipped **until that script changes** — edit a step and it re-runs by
+itself. All output is logged to `/var/log/voip-install/`.
 
-```bash
-bash install.sh v1.11.1
-```
-
-If you want to install it from a remote location, you can also clone the repo first and run the script locally.
-
-## Project structure
+## Architecture
 
 ```text
-.
-├── install.sh
-├── README.md
-├── resources/
-│   └── freeswitch.service
-└── CLAUDE.md
+                internet
+                    |
+            nftables (default deny)
+                    |
+    +---------------+----------------+
+    |               |                |
+ Kamailio        nginx           SSH (admin CIDR only)
+ :5060/:5061     :443
+    |               |
+    |          Bun API :3000 (loopback)
+    |               |
+ rtpengine   PostgreSQL / Redis (loopback)
+ RTP relay
+    |
+ FreeSWITCH :5080 (loopback)
 ```
 
-### Files
+Kamailio owns the public SIP ports and handles registration, authentication and flood
+protection. FreeSWITCH never faces the internet — it listens on loopback and trusts only what
+Kamailio forwards. rtpengine relays media, which is what makes calls work for clients on WiFi
+and mobile behind NAT.
 
-- install.sh: the main installer script
-- resources/freeswitch.service: systemd service template used by the installer
-- README.md: project overview and usage documentation
-- CLAUDE.md: repository-specific guidance for contributors
+## Steps
+
+| Step | Purpose |
+|------|---------|
+| `00-preflight` | Host validation, hostname, timezone, NTP, kernel/limit tuning |
+| `01-base-packages` | Tooling, CA certificates, unattended security upgrades |
+| `10-ssh-hardening` | Key-only SSH (refuses to lock you out if no key exists) |
+| `11-firewall` | nftables default-deny with SIP rate limiting |
+| `12-fail2ban` | Jails for sshd, FreeSWITCH and Kamailio |
+| `13-tls-certs` | Let's Encrypt plus renewal hooks shared by all services |
+| `20-postgresql` | PostgreSQL from PGDG, tuned to host memory |
+| `21-redis` | Redis for mod_hiredis and API caching |
+| `22-provision-databases` | Roles and databases, least privilege |
+| `30-freeswitch` | FreeSWITCH from source |
+| `31-freeswitch-config` | SIP profile, ACLs, ESL on loopback, Opus preference |
+| `32-kamailio` | Kamailio from deb.kamailio.org |
+| `33-kamailio-config` | Schema, TLS, registrar and routing |
+| `34-rtpengine` | Media relay, kernel forwarding where available |
+| `40-bun` | Bun runtime |
+| `41-api-deploy` | API deploy, migrations, hardened systemd unit |
+| `42-nginx` | TLS termination and reverse proxy |
+| `50-logrotate` | Log retention |
+| `51-backups` | Nightly database and config backups |
+| `52-monitoring` | Health checks and node_exporter |
+| `53-cron` | Scheduled maintenance |
+| `99-postflight` | Verify the result; non-zero exit if unsound |
+
+## After installing
+
+`99-postflight.sh` lists what remains. In short:
+
+- Create SIP subscribers: `kamctl add <user>@<domain> <password>`
+- Write the dialplan and outbound trunk routing — `33-kamailio-config.sh` is a safe baseline,
+  not a finished dialplan
+- Narrow `ADMIN_ALLOW_CIDR` if it is still `0.0.0.0/0`
+- Set `OFFSITE_RSYNC_TARGET` so backups leave the host
+- Place a test call and confirm two-way audio
+
+## Operations
+
+```bash
+voip-healthcheck                  # service, port, certificate and disk checks
+voip-backup                       # run a backup now
+fs_cli                            # FreeSWITCH console
+kamctl ul show                    # current registrations
+journalctl -u kamailio -f
+```
+
+## Secrets
+
+Generated on first run and stored in `/etc/voip-pbx/config.env` (mode 0600). They are never
+rotated by a re-run — that would break every service already holding the old value. Back this
+file up: without it the database passwords are unrecoverable.
+
+## Requirements
+
+- Debian 13 (trixie) or Ubuntu, with systemd
+- Root/sudo access and internet access
+- A DNS record for `PBX_FQDN` pointing at the server
+- ~2GB RAM and ~15GB free disk for the FreeSWITCH build plus sounds
 
 ## Notes
 
-- The installer defaults to FreeSWITCH tag v1.11.1 if no tag is provided.
-- The script is designed to be rerun safely after a partial failure.
-- Some module selections are intentionally customized for this setup.
-- Membership of the freeswitch group (which grants access to `conf/` and `log/` without
-  sudo) only applies to new login sessions. Log out and back in after installing.
-
-## Planned improvements
-
-This repository is still in its early stages. Planned work may include:
-
-- better configuration handling for different Ubuntu/Debian versions
-- optional support for additional FreeSWITCH modules
-- improved logging and install diagnostics
-- documentation for post-install verification and troubleshooting
-- support for more deployment scenarios and automation
-
-## Contributing
-
-Contributions are welcome as this project grows.
-
-If you would like to improve the installer, add new features, or improve the documentation, feel free to open an issue or submit a pull request.
-
-## License
-
-This project is currently maintained as an open source installer script for FreeSWITCH deployment. Please check the repository for any license details before reusing it in production environments.
+- Membership of the `freeswitch` group only applies to new login sessions — log out and back
+  in after installing.
+- Video is disabled (`--disable-libvpx`); this is a voice-only switch.
+- Sound files are installed at 8kHz and 48kHz only. See `FS_SOUND_RATES`.

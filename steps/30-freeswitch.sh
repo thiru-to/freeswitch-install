@@ -1,13 +1,21 @@
 #!/usr/bin/env bash
+### FreeSWITCH built from source - the media server and PBX core.
 set -euo pipefail
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/../lib/common.sh"
 
-FS_VERSION="${1:-v1.11.1}"
+require_root
+load_config
+
+### $1 still overrides the tag for a one-off build; otherwise it comes from config.env.
+FS_VERSION="${1:-${FS_VERSION:-v1.11.1}}"
+FS_SOUND_RATES="${FS_SOUND_RATES:-8000 48000}"
 BUILD_DIR="/usr/src"
 PREFIX="/usr/local/freeswitch"
 JOBS="$(nproc)"
 
+info "Building FreeSWITCH $FS_VERSION with $JOBS jobs"
+
 sudo apt -y update
-sudo apt -y upgrade
 sudo apt -y install htop curl git sngrep ca-certificates \
   gpg vim-tiny tcpdump rsyslog apt-transport-https gnupg2 lsb-release wget
 
@@ -28,13 +36,11 @@ cd "$BUILD_DIR"
 [ -d "$BUILD_DIR/freeswitch" ] || sudo git clone -b "$FS_VERSION" https://github.com/signalwire/freeswitch.git
 [ -d "$BUILD_DIR/sofia-sip" ]  || sudo git clone https://github.com/freeswitch/sofia-sip.git
 
-### resources/ (the systemd unit template) comes from this repo. Refresh it on re-runs so a
-### stale clone from an earlier install does not deploy an out-of-date unit file.
-if [ -d "$BUILD_DIR/freeswitch-install" ]; then
-  sudo git -C "$BUILD_DIR/freeswitch-install" pull --ff-only
-else
-  sudo git clone https://github.com/thiru-to/freeswitch-install.git
-fi
+### The systemd unit template comes from this repo's own checkout ($REPO_DIR, set by
+### lib/common.sh). This used to clone the repo from GitHub onto the target, which meant a
+### local edit did nothing until it was pushed - a genuinely confusing failure mode.
+UNIT_TEMPLATE="$REPO_DIR/resources/freeswitch.service"
+[ -f "$UNIT_TEMPLATE" ] || die "Missing $UNIT_TEMPLATE - is the repo checkout complete?"
 
 ### Install spandsp
 cd "$BUILD_DIR/spandsp"
@@ -124,7 +130,6 @@ sudo make install
 ### 'cd-sounds-install' quietly drags down all four rates (~383MB). The per-rate targets below
 ### go through the Makefile's .DEFAULT rule and fetch exactly one tarball each.
 ### 8000 covers G.711/PSTN legs, 48000 covers Opus. Add 16000/32000 here if you ever need them.
-FS_SOUND_RATES="8000 48000"
 for rate in $FS_SOUND_RATES; do
   sudo make "sounds-en-us-callie-${rate}-install" "sounds-music-${rate}-install"
 done
@@ -208,9 +213,18 @@ sudo ln -sf "$PREFIX/bin/fs_cli" /usr/bin/fs_cli
 sudo ln -sf "$PREFIX/bin/freeswitch" /usr/sbin/freeswitch
 
 ### FreeSWITCH runs as the freeswitch user and writes to db/, log/, run/ and recordings/
-### underneath the prefix, so the whole tree has to be owned by it.
+### underneath the prefix, so the whole tree is owned by it. Admins get write access through
+### the freeswitch group (added above); everyone else keeps read + traverse.
+###
+### Deliberately NOT locking out "other" here. Anyone with sudo can read these files anyway,
+### so removing world access buys no real protection - it only makes routine inspection
+### (tail -f the log, less a config) fail unless every command is prefixed with sudo.
 sudo chown -R freeswitch:freeswitch "$PREFIX"
-sudo chmod -R u+rwX,g+rwX,o-rwx "$PREFIX/conf" "$PREFIX/db" "$PREFIX/log"
+sudo chmod -R u+rwX,g+rwX,o+rX "$PREFIX"
+
+### setgid on the config tree so a file an admin creates stays in the freeswitch group and
+### remains readable by the service, instead of landing under that admin's primary group.
+sudo find "$PREFIX/conf" -type d -exec chmod g+s {} +
 
 ### Conventional location for the config, for anyone who goes looking in /etc.
 sudo ln -sfn "$PREFIX/conf" /etc/freeswitch
@@ -221,7 +235,7 @@ if [ ! -x "$PREFIX/bin/freeswitch" ]; then
 fi
 
 ### Create freeswitch service
-sudo sed "s|\${PREFIX}|$PREFIX|g" "$BUILD_DIR/freeswitch-install/resources/freeswitch.service" \
+sudo sed "s|\${PREFIX}|$PREFIX|g" "$UNIT_TEMPLATE" \
   | sudo tee /etc/systemd/system/freeswitch.service >/dev/null
 
 sudo systemctl daemon-reload
