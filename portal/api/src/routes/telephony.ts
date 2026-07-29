@@ -10,6 +10,7 @@ import { Hono } from "hono";
 import { db } from "../db";
 import {
   extension,
+  queue,
   inboundRoute,
   ivrMenu,
   ivrOption,
@@ -19,11 +20,55 @@ import {
   timeCondition,
   trunk,
 } from "../db/schema";
-import { crudRoutes } from "../lib/crud";
+import { crudRoutes, tenantOwns } from "../lib/crud";
+import { recordAudit } from "../lib/audit";
 import { encrypt } from "../lib/crypto";
 import { cacheInboundRoutes, cacheRouteTable, rebuildTenant } from "../services/cache";
 import { reloadKamailio, removeTrunkAddress, syncTrunkAddress } from "../services/kamailio-sync";
 import { requireTenant, type AppEnv } from "../middleware/tenant";
+
+/**
+ * Validates a polymorphic destination reference against the tenant.
+ *
+ * Destinations appear on inbound routes, IVR options, ring-group failover and both branches of
+ * a time condition, and every one of them is an id the client supplies. Without this a tenant
+ * can point their call flow at another tenant's ring group or IVR.
+ */
+async function badDestination(
+  type: unknown,
+  id: unknown,
+  organizationId: string,
+): Promise<string | null> {
+  if (type === undefined || type === null) return null;
+
+  // These carry no row reference: `external` holds a literal number, the others nothing.
+  if (type === "external" || type === "hangup" || type === "voicemail" || type === "fax") {
+    return null;
+  }
+  if (id === undefined || id === null || id === "") {
+    return `destinationId is required when destinationType is ${String(type)}`;
+  }
+
+  const owned = await (async () => {
+    switch (type) {
+      case "extension":
+        return tenantOwns(extension, extension.organizationId, extension.id, id, organizationId);
+      case "ring_group":
+        return tenantOwns(ringGroup, ringGroup.organizationId, ringGroup.id, id, organizationId);
+      case "ivr":
+        return tenantOwns(ivrMenu, ivrMenu.organizationId, ivrMenu.id, id, organizationId);
+      case "time_condition":
+        return tenantOwns(
+          timeCondition, timeCondition.organizationId, timeCondition.id, id, organizationId);
+      case "queue":
+        return tenantOwns(queue, queue.organizationId, queue.id, id, organizationId);
+      default:
+        return false;
+    }
+  })();
+
+  return owned ? null : `destination ${String(type)}/${String(id)} does not belong to this tenant`;
+}
 
 /* ---------------------------------------------------------------------------------------
  * Trunks
@@ -78,6 +123,18 @@ trunkSecrets.put("/:id/password", async (c) => {
     .where(and(eq(trunk.id, c.req.param("id")), eq(trunk.organizationId, c.get("organizationId"))))
     .returning();
   if (!row) return c.json({ error: "Not found" }, 404);
+
+  // Rotating a carrier credential is exactly what an audit trail is for - "who changed the
+  // trunk password before it stopped authenticating" is unanswerable otherwise. The record
+  // deliberately carries no before/after, so the secret is never written anywhere but the
+  // encrypted column.
+  await recordAudit(c, {
+    action: "rotate-password",
+    entityType: "trunk",
+    entityId: row.id,
+    after: { name: row.name, host: row.host, passwordRotated: true },
+  });
+
   return c.json({ status: "updated" });
 });
 trunks.route("/", trunkSecrets);
@@ -93,6 +150,8 @@ export const inboundRoutes = crudRoutes({
   entityType: "inbound_route",
   required: ["didPattern", "destinationType"],
   writable: ["didPattern", "description", "destinationType", "destinationId", "priority", "enabled"],
+  validate: async (body, organizationId) =>
+    badDestination(body.destinationType, body.destinationId, organizationId),
   afterChange: async (organizationId) => {
     await cacheInboundRoutes(organizationId);
   },
@@ -108,7 +167,14 @@ export const outboundRoutes = crudRoutes({
     "name", "pattern", "trunkId", "stripDigits", "prependDigits",
     "callerIdOverride", "priority", "isEmergency", "enabled",
   ],
-  validate: async (body) => {
+  validate: async (body, organizationId) => {
+    // A trunk belonging to another tenant would route this tenant's calls out through
+    // someone else's carrier, billed to them.
+    if (body.trunkId !== undefined && body.trunkId !== null) {
+      const owned = await tenantOwns(
+        trunk, trunk.organizationId, trunk.id, body.trunkId, organizationId);
+      if (!owned) return "trunkId does not belong to this tenant";
+    }
     // An invalid pattern is not caught until a call matches it, at which point the Lua
     // handler silently skips the route and the call fails with no route. Reject it here.
     if (typeof body.pattern === "string") {
@@ -145,6 +211,8 @@ export const ringGroups = crudRoutes({
   writable: [
     "number", "name", "strategy", "ringTimeoutSec", "failoverType", "failoverId", "enabled",
   ],
+  validate: async (body, organizationId) =>
+    badDestination(body.failoverType, body.failoverId, organizationId),
   afterChange: async (organizationId) => {
     await rebuildTenant(organizationId);
   },
@@ -214,7 +282,19 @@ ringGroupMembers.delete("/:id/members/:memberId", async (c) => {
     .where(and(eq(ringGroup.id, c.req.param("id")), eq(ringGroup.organizationId, c.get("organizationId"))));
   if (!group) return c.json({ error: "Ring group not found" }, 404);
 
-  await db.delete(ringGroupMember).where(eq(ringGroupMember.id, c.req.param("memberId")));
+  // Scoped to the verified group, not just the member id. Verifying only the group let a
+  // tenant delete ANY member row by pairing their own group id with someone else's member id.
+  const removed = await db
+    .delete(ringGroupMember)
+    .where(
+      and(
+        eq(ringGroupMember.id, c.req.param("memberId")),
+        eq(ringGroupMember.ringGroupId, group.id),
+      ),
+    )
+    .returning();
+  if (removed.length === 0) return c.json({ error: "Member not found in this group" }, 404);
+
   await rebuildTenant(c.get("organizationId"));
   return c.body(null, 204);
 });
@@ -230,6 +310,8 @@ export const ivrMenus = crudRoutes({
     "number", "name", "greetingSound", "invalidSound", "timeoutSec",
     "maxRetries", "timeoutType", "timeoutId", "enabled",
   ],
+  validate: async (body, organizationId) =>
+    badDestination(body.timeoutType, body.timeoutId, organizationId),
   afterChange: async (organizationId) => {
     await rebuildTenant(organizationId);
   },
@@ -255,6 +337,10 @@ ivrOptions.put("/:id/options/:digit", async (c) => {
 
   const body = await c.req.json<{ destinationType?: string; destinationId?: string; description?: string }>();
   if (!body.destinationType) return c.json({ error: "destinationType is required" }, 400);
+
+  const problem = await badDestination(
+    body.destinationType, body.destinationId, c.get("organizationId"));
+  if (problem) return c.json({ error: problem }, 400);
 
   const [row] = await db
     .insert(ivrOption)
@@ -301,7 +387,12 @@ export const timeConditions = crudRoutes({
   writable: [
     "name", "timezone", "rules", "matchType", "matchId", "noMatchType", "noMatchId", "enabled",
   ],
-  validate: async (body) => {
+  validate: async (body, organizationId) => {
+    const matchProblem = await badDestination(body.matchType, body.matchId, organizationId);
+    if (matchProblem) return matchProblem;
+    const noMatchProblem = await badDestination(body.noMatchType, body.noMatchId, organizationId);
+    if (noMatchProblem) return noMatchProblem;
+
     // The rules are evaluated by Lua at call time, where a malformed shape means the condition
     // silently never matches and calls quietly take the wrong branch. Check it on the way in.
     if (body.rules !== undefined) {

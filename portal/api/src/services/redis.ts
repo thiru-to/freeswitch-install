@@ -11,6 +11,9 @@
  *   voip:routes:<domain>         the tenant's outbound route table, JSON
  *   voip:did:<domain>:<number>   inbound DID destination, JSON
  *   voip:tenant:<domain>         tenant settings needed at call time, JSON
+ *   voip:rg:<domain>:<id>        ring group with its members
+ *   voip:ivr:<domain>:<id>       IVR menu with its options, keyed by digit
+ *   voip:tc:<domain>:<id>        time condition with its rules
  */
 import { RedisClient } from "bun";
 import { env } from "../env";
@@ -22,6 +25,10 @@ export const keys = {
   routes: (domain: string) => `voip:routes:${domain}`,
   did: (domain: string, number: string) => `voip:did:${domain}:${number}`,
   tenant: (domain: string) => `voip:tenant:${domain}`,
+  /** Call-flow objects, read by the Lua scripts mid-call. */
+  ringGroup: (domain: string, id: string) => `voip:rg:${domain}:${id}`,
+  ivr: (domain: string, id: string) => `voip:ivr:${domain}:${id}`,
+  timeCondition: (domain: string, id: string) => `voip:tc:${domain}:${id}`,
   /** Prefix used when clearing everything for one tenant. */
   tenantPrefix: (domain: string) => `voip:*:${domain}*`,
 } as const;

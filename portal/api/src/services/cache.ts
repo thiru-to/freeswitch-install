@@ -22,8 +22,13 @@ import { db } from "../db";
 import {
   extension,
   inboundRoute,
+  ivrMenu,
+  ivrOption,
   outboundRoute,
+  ringGroup,
+  ringGroupMember,
   tenantSettings,
+  timeCondition,
   trunk,
 } from "../db/schema";
 import { decrypt } from "../lib/crypto";
@@ -237,6 +242,123 @@ export async function cacheTenantSettings(organizationId: string): Promise<void>
   );
 }
 
+/* ---------------------------------------------------------------------------------------
+ * Call-flow objects
+ *
+ * These are read by the Lua scripts at call time (ring_group.lua, ivr.lua,
+ * time_condition.lua). Cached whole - a ring group with its members, a menu with its options -
+ * because the alternative is the script making several round trips mid-call, and each one is
+ * dead air the caller can hear.
+ * ------------------------------------------------------------------------------------ */
+
+export async function cacheRingGroups(organizationId: string): Promise<void> {
+  const tenant = await db.query.tenantSettings.findFirst({
+    where: eq(tenantSettings.organizationId, organizationId),
+  });
+  if (!tenant) return;
+
+  const groups = await db.query.ringGroup.findMany({
+    where: and(eq(ringGroup.organizationId, organizationId), eq(ringGroup.enabled, true)),
+  });
+
+  for (const group of groups) {
+    const members = await db
+      .select({
+        number: extension.number,
+        position: ringGroupMember.position,
+        delaySec: ringGroupMember.delaySec,
+        enabled: extension.enabled,
+      })
+      .from(ringGroupMember)
+      .innerJoin(extension, eq(ringGroupMember.extensionId, extension.id))
+      .where(eq(ringGroupMember.ringGroupId, group.id));
+
+    await safeSet(
+      keys.ringGroup(tenant.sipDomain, group.id),
+      JSON.stringify({
+        id: group.id,
+        number: group.number,
+        name: group.name,
+        strategy: group.strategy,
+        ringTimeoutSec: group.ringTimeoutSec,
+        failoverType: group.failoverType,
+        failoverId: group.failoverId,
+        // Disabled extensions are filtered here rather than in Lua: a disabled member should
+        // not even be attempted, and doing it at cache time keeps the call path simple.
+        members: members
+          .filter((m) => m.enabled)
+          .sort((a, b) => a.position - b.position)
+          .map((m) => ({ number: m.number, delaySec: m.delaySec })),
+      }),
+    );
+  }
+}
+
+export async function cacheIvrMenus(organizationId: string): Promise<void> {
+  const tenant = await db.query.tenantSettings.findFirst({
+    where: eq(tenantSettings.organizationId, organizationId),
+  });
+  if (!tenant) return;
+
+  const menus = await db.query.ivrMenu.findMany({
+    where: and(eq(ivrMenu.organizationId, organizationId), eq(ivrMenu.enabled, true)),
+  });
+
+  for (const menu of menus) {
+    const options = await db.query.ivrOption.findMany({
+      where: eq(ivrOption.ivrMenuId, menu.id),
+    });
+    await safeSet(
+      keys.ivr(tenant.sipDomain, menu.id),
+      JSON.stringify({
+        id: menu.id,
+        number: menu.number,
+        name: menu.name,
+        greetingSound: menu.greetingSound,
+        invalidSound: menu.invalidSound,
+        timeoutSec: menu.timeoutSec,
+        maxRetries: menu.maxRetries,
+        timeoutType: menu.timeoutType,
+        timeoutId: menu.timeoutId,
+        // Keyed by digit so Lua can look up in one step rather than scanning.
+        options: Object.fromEntries(
+          options.map((o) => [o.digit, { type: o.destinationType, id: o.destinationId }]),
+        ),
+      }),
+    );
+  }
+}
+
+export async function cacheTimeConditions(organizationId: string): Promise<void> {
+  const tenant = await db.query.tenantSettings.findFirst({
+    where: eq(tenantSettings.organizationId, organizationId),
+  });
+  if (!tenant) return;
+
+  const conditions = await db.query.timeCondition.findMany({
+    where: and(
+      eq(timeCondition.organizationId, organizationId),
+      eq(timeCondition.enabled, true),
+    ),
+  });
+
+  for (const cond of conditions) {
+    await safeSet(
+      keys.timeCondition(tenant.sipDomain, cond.id),
+      JSON.stringify({
+        id: cond.id,
+        name: cond.name,
+        timezone: cond.timezone,
+        rules: cond.rules,
+        matchType: cond.matchType,
+        matchId: cond.matchId,
+        noMatchType: cond.noMatchType,
+        noMatchId: cond.noMatchId,
+      }),
+    );
+  }
+}
+
 /**
  * Rebuilds everything for one tenant. Used on provisioning, after a bulk import, and as the
  * repair action when the cache is suspected stale.
@@ -245,6 +367,9 @@ export async function rebuildTenant(organizationId: string): Promise<void> {
   await cacheTenantSettings(organizationId);
   await cacheRouteTable(organizationId);
   await cacheInboundRoutes(organizationId);
+  await cacheRingGroups(organizationId);
+  await cacheIvrMenus(organizationId);
+  await cacheTimeConditions(organizationId);
 
   const extensions = await db.query.extension.findMany({
     where: eq(extension.organizationId, organizationId),

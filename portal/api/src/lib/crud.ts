@@ -44,6 +44,32 @@ export type CrudOptions<T extends PgTable> = {
   validate?: (body: Row, organizationId: string) => Promise<string | null>;
 };
 
+/**
+ * Confirms a referenced row belongs to this tenant.
+ *
+ * Scoping the resource being written is not enough. A foreign key points at ANOTHER row, and
+ * nothing stops a client sending an id belonging to a different tenant - the insert succeeds
+ * because the column only has a foreign-key constraint, not a tenancy one.
+ *
+ * The worst case is not a leak but a cost: an outbound route referencing another tenant's
+ * trunk sends your calls out through their carrier, billed to them.
+ */
+export async function tenantOwns(
+  table: PgTable,
+  orgColumn: PgColumn,
+  idColumn: PgColumn,
+  id: unknown,
+  organizationId: string,
+): Promise<boolean> {
+  if (typeof id !== "string" || id === "") return false;
+  const rows = await db
+    .select({ id: idColumn })
+    .from(table)
+    .where(and(eq(idColumn, id), eq(orgColumn, organizationId)))
+    .limit(1);
+  return rows.length > 0;
+}
+
 function pick(body: Row, writable: readonly string[]): Row {
   const out: Row = {};
   for (const key of writable) {
