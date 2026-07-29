@@ -24,35 +24,49 @@ STATE_DIR="/var/lib/voip-install"
 ### The install order. Dependencies flow downwards - do not reorder without checking that
 ### nothing later depends on something earlier (Kamailio needs its database; the API needs
 ### Bun and Postgres; TLS certs must exist before anything binds a TLS port).
+###
+### Format: "script|roles|description". A step runs when ROLES contains "all", when the
+### step's role is "all", or when the step's role appears in ROLES. The all-in-one machine
+### is simply ROLES="all" - the degenerate case where every role lands on one host.
+###
+### Roles:
+###   all     - host-level work every machine needs regardless of what it runs
+###   db      - PostgreSQL and Redis
+###   sip     - Kamailio and rtpengine (the SIP edge)
+###   media   - FreeSWITCH (the media/PBX core)
+###   portal  - the API, the web portal and nginx
 STEPS=(
-  "00-preflight.sh|Host validation, hostname/FQDN, timezone, NTP, kernel and limit tuning"
-  "01-base-packages.sh|Common tooling, CA certificates, unattended security upgrades"
+  "00-preflight.sh|all|Host validation, hostname/FQDN, timezone, NTP, kernel and limit tuning"
+  "01-base-packages.sh|all|Common tooling, CA certificates, unattended security upgrades"
 
-  "10-ssh-hardening.sh|Key-only SSH, no root login, restricted auth"
-  "11-firewall.sh|nftables: default deny, SIP/RTP/HTTPS allowlist, SIP rate limiting"
-  "12-fail2ban.sh|Jails for sshd, FreeSWITCH (mod_fail2ban) and Kamailio"
-  "13-tls-certs.sh|Let's Encrypt certificates + renewal hooks for SIP TLS, WSS and the API"
+  "10-ssh-hardening.sh|all|Key-only SSH, no root login, restricted auth"
+  "11-firewall.sh|all|nftables: default deny, SIP/RTP/HTTPS allowlist, SIP rate limiting"
+  "12-fail2ban.sh|all|Jails for sshd, FreeSWITCH (mod_fail2ban) and Kamailio"
+  "13-tls-certs.sh|all|Let's Encrypt certificates + renewal hooks for SIP TLS, WSS and the API"
+  "14-responsive-firewall.sh|sip|Reputation-tiered SIP rate limiting, learned from live registrations"
 
-  "20-postgresql.sh|PostgreSQL 18 from PGDG, pg_hba, tuning, WAL/backup prep"
-  "21-redis.sh|Redis for mod_hiredis and API caching"
-  "22-provision-databases.sh|Roles and databases for Kamailio and the API, least privilege"
+  "20-postgresql.sh|db|PostgreSQL 18 from PGDG, pg_hba, tuning, WAL/backup prep"
+  "21-redis.sh|db|Redis for mod_hiredis and API caching"
+  "22-provision-databases.sh|db|Roles and databases for Kamailio and the API, least privilege"
 
-  "30-freeswitch.sh|FreeSWITCH from source (media server / PBX core)"
-  "31-freeswitch-config.sh|SIP profiles, ACLs, TLS, event_socket bind, Opus codec preference"
-  "32-kamailio.sh|Kamailio 6.1 from deb.kamailio.org with postgres/tls/lua modules"
-  "33-kamailio-config.sh|Registrar, proxy logic, dispatcher to FreeSWITCH, kamdbctl schema"
-  "34-rtpengine.sh|RTP relay for NAT traversal (WiFi/mobile clients)"
+  "30-freeswitch.sh|media|FreeSWITCH from source (media server / PBX core)"
+  "31-freeswitch-config.sh|media|SIP profiles, ACLs, xml_curl + Lua, Opus codec preference"
+  "32-kamailio.sh|sip|Kamailio 6.1 from deb.kamailio.org with postgres/tls/lua modules"
+  "33-stir-shaken.sh|sip|STIR/SHAKEN caller attestation (source build; off by default)"
+  "34-kamailio-config.sh|sip|Registrar, multi-tenant routing, WebRTC/WSS, dispatcher, schema"
+  "35-rtpengine.sh|sip|RTP relay and WebRTC media bridging (DTLS-SRTP <-> RTP)"
 
-  "40-bun.sh|Bun runtime"
-  "41-api-deploy.sh|Hono API build, Drizzle migrations, systemd unit, secrets"
-  "42-nginx.sh|TLS reverse proxy for the API and WSS"
+  "40-bun.sh|portal|Bun runtime"
+  "41-api-deploy.sh|portal media|Hono API build, Drizzle migrations, systemd unit, secrets"
+  "42-nginx.sh|portal|TLS reverse proxy for the API and WSS"
+  "43-portal-web.sh|portal|Build the React admin portal and publish it for nginx"
 
-  "50-logrotate.sh|Rotation and retention for FreeSWITCH, Kamailio and API logs"
-  "51-backups.sh|Scheduled pg_dump plus config snapshots, with retention"
-  "52-monitoring.sh|Health checks, metrics exporter, alerting"
-  "53-cron.sh|Scheduled maintenance (CDR rollup, cleanup)"
+  "50-logrotate.sh|all|Rotation and retention for FreeSWITCH, Kamailio and API logs"
+  "51-backups.sh|db|Scheduled pg_dump plus config snapshots, with retention"
+  "52-monitoring.sh|all|Health checks, metrics exporter, alerting"
+  "53-cron.sh|db|Scheduled maintenance (CDR rollup, cleanup)"
 
-  "99-postflight.sh|Verify services, listening ports, TLS validity; print summary"
+  "99-postflight.sh|all|Verify services, listening ports, TLS validity; print summary"
 )
 
 ### ----------------------------------------------------------------------------------------
@@ -95,8 +109,32 @@ while [ $# -gt 0 ]; do
   shift
 done
 
-step_name() { printf '%s' "${1%%|*}"; }
-step_desc() { printf '%s' "${1#*|}"; }
+step_name()  { printf '%s' "${1%%|*}"; }
+step_desc()  { printf '%s' "${1##*|}"; }
+step_roles() { local r="${1#*|}"; printf '%s' "${r%%|*}"; }
+
+### Which roles this machine plays. Read from the deployed config so --list works before the
+### installer has ever run; "all" (the all-in-one case) is the default.
+ROLES="all"
+if [ -r /etc/voip-pbx/config.env ]; then
+  ROLES="$(sed -n 's/^ROLES=["'"'"']\{0,1\}\([^"'"'"']*\)["'"'"']\{0,1\}.*/\1/p' \
+    /etc/voip-pbx/config.env | tail -1)"
+  [ -n "$ROLES" ] || ROLES="all"
+fi
+
+### A step runs when this host is all-in-one, when the step applies to every host regardless
+### of role, or when any of the step's roles is one this host plays.
+step_applies() {
+  local roles="$1" r h
+  case " $ROLES " in *" all "*) return 0 ;; esac
+  case " $roles " in *" all "*) return 0 ;; esac
+  for r in $roles; do
+    for h in $ROLES; do
+      [ "$r" = "$h" ] && return 0
+    done
+  done
+  return 1
+}
 
 ### Markers record the checksum of the script that satisfied the step. If the script is later
 ### edited, the checksum no longer matches and the step runs again - which is what makes
@@ -117,9 +155,18 @@ step_state() {
 ### ----------------------------------------------------------------------------------------
 
 if [ "$DO_LIST" -eq 1 ]; then
-  printf '\n%sInstall plan%s  (steps live in %s)\n\n' "$C_BOLD" "$C_RESET" "$STEP_DIR"
+  printf '\n%sInstall plan%s  (steps in %s, roles: %s%s%s)\n\n' \
+    "$C_BOLD" "$C_RESET" "$STEP_DIR" "$C_BOLD" "$ROLES" "$C_RESET"
   for entry in "${STEPS[@]}"; do
     name="$(step_name "$entry")"
+    roles="$(step_roles "$entry")"
+
+    if ! step_applies "$roles"; then
+      printf '  %bskipped%b      %-26s %s\n' \
+        "$C_YELLOW" "$C_RESET" "$name" "not a '$ROLES' role (needs: $roles)"
+      continue
+    fi
+
     case "$(step_state "$name")" in
       done)    tag="${C_GREEN}done${C_RESET}      " ;;
       changed) tag="${C_YELLOW}changed${C_RESET}   " ;;
@@ -163,18 +210,28 @@ info "VoIP PBX installer starting"
 info "Logging to $LOG_FILE"
 [ "$DO_DRYRUN" -eq 1 ] && warn "DRY RUN - no step will actually execute"
 
+info "Roles on this machine: $ROLES"
+
 started=0
-ran=0; skipped=0; absent=0
+ran=0; skipped=0; absent=0; notmyrole=0
 
 for entry in "${STEPS[@]}"; do
   name="$(step_name "$entry")"
   desc="$(step_desc "$entry")"
+  roles="$(step_roles "$entry")"
   path="$STEP_DIR/$name"
 
   ### --only runs exactly one step; --from starts the run at a given step.
   if [ -n "$ONLY_STEP" ] && [ "$name" != "$ONLY_STEP" ]; then continue; fi
   if [ -n "$FROM_STEP" ] && [ "$started" -eq 0 ]; then
     if [ "$name" = "$FROM_STEP" ]; then started=1; else continue; fi
+  fi
+
+  ### --only is an explicit instruction, so it overrides role filtering: an operator asking
+  ### for one step by name should get it rather than a silent skip.
+  if [ -z "$ONLY_STEP" ] && ! step_applies "$roles"; then
+    notmyrole=$((notmyrole + 1))
+    continue
   fi
 
   state="$(step_state "$name")"
@@ -217,7 +274,7 @@ fi
 
 CURRENT_STEP="finish"
 printf '\n'
-ok "Done. $ran run, $skipped already complete, $absent not yet written."
+ok "Done. $ran run, $skipped already complete, $absent not yet written, $notmyrole not for this role."
 info "Log: $LOG_FILE"
 [ "$absent" -gt 0 ] && warn "The install is incomplete until the missing steps above exist."
 exit 0

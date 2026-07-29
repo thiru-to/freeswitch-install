@@ -8,7 +8,16 @@ load_config
 
 apt_install nginx
 
+WEB_ROOT="${WEB_ROOT:-/var/www/voip-portal}"
 TLS_DIR="/etc/voip-pbx/tls"
+
+### 43-portal-web.sh publishes the built bundle here. Create a placeholder so nginx has a
+### valid root on a first run where the portal has not been built yet.
+if [ ! -d "$WEB_ROOT" ]; then
+  install -d -m 0755 "$WEB_ROOT"
+  printf '<!doctype html><title>VoIP PBX</title><p>Portal not built yet - run 43-portal-web.sh.\n' \
+    > "$WEB_ROOT/index.html"
+fi
 if [ ! -f "$TLS_DIR/fullchain.pem" ]; then
   die "No certificate at $TLS_DIR - run 13-tls-certs.sh first."
 fi
@@ -25,8 +34,24 @@ EOF
 
 rm -f /etc/nginx/sites-enabled/default
 
+### Debian's stock nginx.conf declares several of the directives we set below at http scope.
+### nginx treats a second declaration of most of them as a hard error, not an override, so the
+### distro versions are commented out rather than fought with. Doing it as a list means adding
+### a directive to 00-hardening.conf only needs the name adding here too.
+NGINX_OVERRIDDEN="server_tokens ssl_protocols ssl_prefer_server_ciphers ssl_ciphers ssl_session_timeout ssl_session_cache ssl_session_tickets"
+for directive in $NGINX_OVERRIDDEN; do
+  if grep -qE "^[[:space:]]*${directive}[[:space:]]" /etc/nginx/nginx.conf; then
+    sed -i -E "s|^([[:space:]]*)(${directive}[[:space:]].*)|\1# \2  # overridden in conf.d/00-hardening.conf|" \
+      /etc/nginx/nginx.conf
+    info "Neutralised stock ${directive} in nginx.conf"
+  fi
+done
+
 write_file /etc/nginx/conf.d/00-hardening.conf 0644 <<'EOF' || true
 # Managed by the VoIP PBX installer.
+#
+# The distro's own copies of these directives are commented out of nginx.conf by
+# 42-nginx.sh - nginx rejects a duplicate rather than letting the later one win.
 server_tokens off;
 
 # TLS policy, applied to every server block.
@@ -89,17 +114,37 @@ server {
     }
 
     # Authentication endpoints are the ones worth brute forcing, so they are limited far
-    # more tightly than ordinary API traffic.
-    location ~ ^/(auth|login|token) {
+    # more tightly than ordinary API traffic. better-auth mounts under /api/auth.
+    location ~ ^/api/(auth|login|token) {
         limit_req zone=api_auth burst=5 nodelay;
         proxy_pass http://127.0.0.1:${API_PORT};
         include /etc/nginx/proxy_params;
     }
 
-    location / {
+    location /api/ {
         limit_req zone=api_general burst=40 nodelay;
         proxy_pass http://127.0.0.1:${API_PORT};
         include /etc/nginx/proxy_params;
+    }
+
+    # The admin portal: a static Vite bundle published by 43-portal-web.sh.
+    root ${WEB_ROOT};
+    index index.html;
+
+    # Hashed asset filenames are content-addressed, so they can be cached indefinitely.
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files \$uri =404;
+    }
+
+    # TanStack Router owns the client-side routes, so any unmatched path has to fall through
+    # to index.html or a refresh on a deep link returns 404.
+    location / {
+        try_files \$uri \$uri/ /index.html;
+        # index.html itself must never be cached, or clients keep loading a bundle whose
+        # hashed assets no longer exist after a deploy.
+        add_header Cache-Control "no-store, must-revalidate";
     }
 }
 EOF

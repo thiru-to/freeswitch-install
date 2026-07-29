@@ -56,6 +56,7 @@ table inet filter {
         udp dport ${SIP_PORT} accept
         tcp dport ${SIP_PORT} accept
         tcp dport ${SIPS_PORT} accept
+$( [ "${ENABLE_WEBRTC:-1}" = "1" ] && printf '        # SIP over secure WebSocket, for browser clients.\n        tcp dport %s accept' "${WSS_PORT:-8443}" )
 
         # RTP media, handled by rtpengine.
         udp dport ${RTP_PORT_MIN}-${RTP_PORT_MAX} accept
@@ -76,6 +77,10 @@ table inet filter {
 EOF
 
 nft -c -f /etc/nftables.conf || die "nftables ruleset is invalid - not applying."
-systemctl enable nftables >/dev/null 2>&1 || true
+
+### enable AND start. Enabling alone leaves the unit inactive until the next boot, so the
+### ruleset is live (we load it below) while systemd reports the firewall as not running -
+### which is exactly the kind of discrepancy that makes someone distrust the monitoring.
+systemctl enable --now nftables >/dev/null 2>&1 || systemctl enable nftables >/dev/null 2>&1 || true
 nft -f /etc/nftables.conf
 ok "Firewall active: SSH limited to ${ADMIN_ALLOW_CIDR}, SIP ${SIP_PORT}/${SIPS_PORT}, RTP ${RTP_PORT_MIN}-${RTP_PORT_MAX}"

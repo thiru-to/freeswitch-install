@@ -71,19 +71,29 @@ final-timeout = 21600
 # Delete delay of 0 frees ports immediately on BYE rather than holding them.
 delete-delay = 0
 
+# WebRTC. Browsers require DTLS-SRTP and ICE; FreeSWITCH speaks plain RTP. rtpengine bridges
+# the two, which is what lets the media server stay unaware that a leg is a browser at all.
+# The fingerprint algorithm must be one browsers accept - sha-1 is still the safe default,
+# and offering only sha-256 breaks older clients.
+dtls-passive = true
+$( [ "${ENABLE_WEBRTC:-1}" = "1" ] && cat <<'INNER'
+listen-http = 127.0.0.1:8080
+INNER
+)
+
 log-level = 5
 log-stderr = false
 
-# Do not fall over if a single stream misbehaves.
-graphite =
+# graphite is deliberately absent rather than empty: rtpengine parses an empty value and
+# exits with "Invalid IP or port ''" rather than treating it as unset.
 num-threads = $(nproc)
 EOF
 
 ### The Debian unit reads defaults from here.
 ensure_directive /etc/default/rtpengine "RUN_RTPENGINE" "yes" "="
 
-enable_service rtpengine
-restart_service rtpengine
+enable_service rtpengine-daemon
+restart_service rtpengine-daemon
 
 sleep 2
 if ss -lun 2>/dev/null | grep -q ":${RTPENGINE_NG_PORT}"; then

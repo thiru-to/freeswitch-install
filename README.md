@@ -12,7 +12,8 @@ config.env.example      site configuration template
 lib/common.sh           shared helpers (logging, idempotency, apt, files, services)
 steps/                  the numbered step scripts
 resources/              systemd unit templates
-app/api/                the Hono API source
+portal/api/             the Hono API source
+portal/web/             the React admin portal
 ```
 
 ## Quick start
@@ -56,12 +57,13 @@ itself. All output is logged to `/var/log/voip-install/`.
     +---------------+----------------+
     |               |                |
  Kamailio        nginx           SSH (admin CIDR only)
- :5060/:5061     :443
+ :5060/:5061     :443 (portal + API)
+ :8443 (WSS)
     |               |
     |          Bun API :3000 (loopback)
     |               |
  rtpengine   PostgreSQL / Redis (loopback)
- RTP relay
+ RTP relay + WebRTC bridge
     |
  FreeSWITCH :5080 (loopback)
 ```
@@ -81,17 +83,20 @@ and mobile behind NAT.
 | `11-firewall` | nftables default-deny with SIP rate limiting |
 | `12-fail2ban` | Jails for sshd, FreeSWITCH and Kamailio |
 | `13-tls-certs` | Let's Encrypt plus renewal hooks shared by all services |
+| `14-responsive-firewall` | Reputation-tiered SIP limits, learned from registrations |
 | `20-postgresql` | PostgreSQL from PGDG, tuned to host memory |
 | `21-redis` | Redis for mod_hiredis and API caching |
 | `22-provision-databases` | Roles and databases, least privilege |
 | `30-freeswitch` | FreeSWITCH from source |
 | `31-freeswitch-config` | SIP profile, ACLs, ESL on loopback, Opus preference |
 | `32-kamailio` | Kamailio from deb.kamailio.org |
-| `33-kamailio-config` | Schema, TLS, registrar and routing |
-| `34-rtpengine` | Media relay, kernel forwarding where available |
+| `33-stir-shaken` | STIR/SHAKEN caller attestation (source build, off by default) |
+| `34-kamailio-config` | Schema, TLS, registrar, routing, WebRTC/WSS |
+| `35-rtpengine` | Media relay, WebRTC bridging, kernel forwarding |
 | `40-bun` | Bun runtime |
 | `41-api-deploy` | API deploy, migrations, hardened systemd unit |
 | `42-nginx` | TLS termination and reverse proxy |
+| `43-portal-web` | Build the React admin portal and publish it |
 | `50-logrotate` | Log retention |
 | `51-backups` | Nightly database and config backups |
 | `52-monitoring` | Health checks and node_exporter |
@@ -103,7 +108,7 @@ and mobile behind NAT.
 `99-postflight.sh` lists what remains. In short:
 
 - Create SIP subscribers: `kamctl add <user>@<domain> <password>`
-- Write the dialplan and outbound trunk routing — `33-kamailio-config.sh` is a safe baseline,
+- Write the dialplan and outbound trunk routing — `34-kamailio-config.sh` is a safe baseline,
   not a finished dialplan
 - Narrow `ADMIN_ALLOW_CIDR` if it is still `0.0.0.0/0`
 - Set `OFFSITE_RSYNC_TARGET` so backups leave the host
@@ -137,4 +142,8 @@ file up: without it the database passwords are unrecoverable.
 - Membership of the `freeswitch` group only applies to new login sessions — log out and back
   in after installing.
 - Video is disabled (`--disable-libvpx`); this is a voice-only switch.
+- WebRTC is on by default (`ENABLE_WEBRTC=1`, WSS on 8443). rtpengine bridges DTLS-SRTP to
+  plain RTP, so FreeSWITCH needs no WebRTC support of its own and mod_verto stays disabled.
+- STIR/SHAKEN is off by default. It is a source build (neither libstirshaken nor Kamailio's
+  stirshaken module is packaged for Debian) and needs a certificate from an STI-CA.
 - Sound files are installed at 8kHz and 48kHz only. See `FS_SOUND_RATES`.

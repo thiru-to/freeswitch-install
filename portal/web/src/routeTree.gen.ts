@@ -8,69 +8,87 @@
 // You should NOT make any changes in this file as it will be overwritten.
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
-import { Route as rootRouteImport } from "./routes/__root"
-import { Route as AingaranRouteImport } from "./routes/aingaran"
-import { Route as HomeRouteImport } from "./routes/telus"
+import { Route as rootRouteImport } from './routes/__root'
+import { Route as IndexRouteImport } from './routes/index'
+import { Route as ExtensionsRouteImport } from './routes/extensions'
+import { Route as SettingsRouteImport } from './routes/settings'
 
-const AingaranRoute = AingaranRouteImport.update({
-  id: "/Aingaran",
-  path: "/Aingaran",
+const IndexRoute = IndexRouteImport.update({
+  id: '/',
+  path: '/',
   getParentRoute: () => rootRouteImport,
 } as any)
-const HomeRoute = HomeRouteImport.update({
-  id: "/Home",
-  path: "/Home",
+const ExtensionsRoute = ExtensionsRouteImport.update({
+  id: '/extensions',
+  path: '/extensions',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const SettingsRoute = SettingsRouteImport.update({
+  id: '/settings',
+  path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
 
 export interface FileRoutesByFullPath {
-  "/Aingaran": typeof AingaranRoute
-  "/Home": typeof HomeRoute
+  '/': typeof IndexRoute
+  '/extensions': typeof ExtensionsRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRoutesByTo {
-  "/Aingaran": typeof AingaranRoute
-  "/Home": typeof HomeRoute
+  '/': typeof IndexRoute
+  '/extensions': typeof ExtensionsRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  "/Aingaran": typeof AingaranRoute
-  "/Home": typeof HomeRoute
+  '/': typeof IndexRoute
+  '/extensions': typeof ExtensionsRoute
+  '/settings': typeof SettingsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: "/Aingaran" | "/Home"
+  fullPaths: '/' | '/extensions' | '/settings'
   fileRoutesByTo: FileRoutesByTo
-  to: "/Aingaran" | "/Home"
-  id: "__root__" | "/Aingaran" | "/Home"
+  to: '/' | '/extensions' | '/settings'
+  id: '__root__' | '/' | '/extensions' | '/settings'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  AingaranRoute: typeof AingaranRoute
-  HomeRoute: typeof HomeRoute
+  IndexRoute: typeof IndexRoute
+  ExtensionsRoute: typeof ExtensionsRoute
+  SettingsRoute: typeof SettingsRoute
 }
 
-declare module "@tanstack/react-router" {
+declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    "/Aingaran": {
-      id: "/Aingaran"
-      path: "/Aingaran"
-      fullPath: "/Aingaran"
-      preLoaderRoute: typeof AingaranRouteImport
+    '/': {
+      id: '/'
+      path: '/'
+      fullPath: '/'
+      preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
-    "/Home": {
-      id: "/Home"
-      path: "/Home"
-      fullPath: "/Home"
-      preLoaderRoute: typeof HomeRouteImport
+    '/extensions': {
+      id: '/extensions'
+      path: '/extensions'
+      fullPath: '/extensions'
+      preLoaderRoute: typeof ExtensionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/settings': {
+      id: '/settings'
+      path: '/settings'
+      fullPath: '/settings'
+      preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
-  AingaranRoute: AingaranRoute,
-  HomeRoute: HomeRoute,
+  IndexRoute: IndexRoute,
+  ExtensionsRoute: ExtensionsRoute,
+  SettingsRoute: SettingsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

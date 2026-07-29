@@ -56,9 +56,20 @@ require_cmd() {
 
 # Generates a URL-safe secret. Used for values that end up in config files and connection
 # strings, so the alphabet avoids characters that need quoting or escaping.
+#
+# Reads a BOUNDED block rather than the obvious `tr -dc … < /dev/urandom | head -c N`. In that
+# form head closes the pipe once it has N bytes, tr is killed by SIGPIPE and exits 141, and
+# `set -o pipefail` turns that into a failed install. Worse, whether it happens at all depends
+# on pipe buffering, so it fails intermittently. Here head bounds the input and exits cleanly,
+# tr reads to EOF, and no process is ever signalled.
 random_secret() {
-  local len="${1:-32}"
-  tr -dc 'A-Za-z0-9' </dev/urandom | head -c "$len"
+  local len="${1:-32}" out=""
+  while [ "${#out}" -lt "$len" ]; do
+    # 8x oversample: the alphabet keeps roughly 3/4 of random bytes, so one pass almost always
+    # suffices and the loop is a guard rather than the normal path.
+    out="${out}$(LC_ALL=C head -c "$((len * 8))" /dev/urandom | LC_ALL=C tr -dc 'A-Za-z0-9')"
+  done
+  printf '%s' "${out:0:len}"
 }
 
 # Writes KEY="value" back into the deployed config, replacing any existing entry. This is how
@@ -87,8 +98,18 @@ config_ensure_secret() {
 }
 
 load_config() {
+  ### 0755, not 0750. Service users need to traverse this directory to reach material we
+  ### deliberately share with them - /etc/voip-pbx/tls, group-readable by ssl-cert. With 0750
+  ### root:root the group permission on the files below is unreachable, and Kamailio fails to
+  ### start with an opaque "Permission denied" from OpenSSL. The secret is config.env itself,
+  ### which is 0600 and stays that way.
+  if [ ! -d "$CONFIG_DIR" ]; then
+    install -d -m 0755 "$CONFIG_DIR"
+  else
+    chmod 0755 "$CONFIG_DIR"
+  fi
+
   if [ ! -f "$CONFIG_FILE" ]; then
-    install -d -m 0750 "$CONFIG_DIR"
     install -m 0600 "$REPO_DIR/config.env.example" "$CONFIG_FILE"
     warn "Created $CONFIG_FILE from the template."
     warn "Edit it now - PBX_FQDN, LETSENCRYPT_EMAIL and ADMIN_ALLOW_CIDR must be real."
@@ -102,6 +123,37 @@ load_config() {
 
   [ "${PBX_FQDN:-}" != "pbx.example.com" ] || die "PBX_FQDN is still the placeholder in $CONFIG_FILE."
   [ -n "${PBX_FQDN:-}" ] || die "PBX_FQDN is not set in $CONFIG_FILE."
+}
+
+### --- Roles ----------------------------------------------------------------------------
+
+### True when this machine plays the given role. Steps use this for conditional work inside a
+### step - for example opening a firewall port only on the machine that actually binds it.
+### An all-in-one host ("all") plays every role.
+has_role() {
+  local want="$1" r
+  case " ${ROLES:-all} " in *" all "*) return 0 ;; esac
+  for r in ${ROLES:-all}; do
+    [ "$r" = "$want" ] && return 0
+  done
+  return 1
+}
+
+### True when every component shares one host, i.e. all inter-component traffic is loopback.
+### Used to decide whether a service should bind loopback only or an internal address.
+is_all_in_one() {
+  case " ${ROLES:-all} " in *" all "*) return 0 ;; esac
+  return 1
+}
+
+### The address a service should bind for internal traffic. Loopback on an all-in-one box;
+### the host's internal address once roles are split, so peers can actually reach it.
+internal_bind_addr() {
+  if is_all_in_one; then
+    printf '127.0.0.1'
+  else
+    ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || printf '0.0.0.0'
+  fi
 }
 
 ### --- Packages -------------------------------------------------------------------------

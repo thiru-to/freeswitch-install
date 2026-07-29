@@ -10,13 +10,21 @@ apt_install redis-server
 
 config_ensure_secret REDIS_PASSWORD 40
 
+### Same reasoning as Postgres: loopback only unless roles are split.
+if is_all_in_one; then
+  redis_bind="127.0.0.1 -::1"
+else
+  redis_bind="127.0.0.1 $(internal_bind_addr) -::1"
+fi
+
 write_file /etc/redis/redis.conf.d/90-voip.conf 0640 redis:redis <<EOF || true
 # Managed by the VoIP PBX installer.
 
-# Loopback only. Nothing outside this host has any business talking to Redis.
-bind 127.0.0.1 -::1
+# Loopback on an all-in-one box, plus the internal address when roles are split. Never a
+# public address - Redis has no business being reachable from outside the deployment.
+bind ${redis_bind}
 protected-mode yes
-port 6379
+port ${REDIS_PORT}
 
 requirepass ${REDIS_PASSWORD}
 
@@ -48,7 +56,7 @@ enable_service redis-server
 restart_service redis-server
 
 if redis-cli -a "$REDIS_PASSWORD" --no-auth-warning ping 2>/dev/null | grep -q PONG; then
-  ok "Redis responding on 127.0.0.1:6379 (password protected)"
+  ok "Redis responding on ${redis_bind} port ${REDIS_PORT:-6379} (password protected)"
 else
   die "Redis is not responding to an authenticated PING."
 fi

@@ -6,7 +6,7 @@ set -euo pipefail
 require_root
 load_config
 
-SRC="$REPO_DIR/app/api"
+SRC="$REPO_DIR/portal/api"
 [ -d "$SRC" ] || die "No API source at $SRC."
 command -v bun >/dev/null || die "Bun is not installed - run 40-bun.sh first."
 
@@ -34,6 +34,13 @@ ok "Source synced to $API_DIR"
 
 ### --- Environment ----------------------------------------------------------------------------
 
+### ENCRYPTION_KEY is kept distinct from AUTH_SECRET on purpose: rotating a session secret
+### should not make every stored SIP password undecryptable. Both are generated once and
+### persist in config.env - config_ensure_secret never rotates an existing value.
+config_ensure_secret ENCRYPTION_KEY 48
+config_ensure_secret AUTH_SECRET 48
+config_ensure_secret FS_XML_GATEWAY_SECRET 32
+
 ### Secrets live in a root-owned file the service can read but not modify, rather than being
 ### baked into the unit where they would show up in `systemctl show`.
 write_file "$API_DIR/.env" 0640 "root:$API_USER" <<EOF || true
@@ -42,13 +49,24 @@ NODE_ENV=production
 PORT=${API_PORT}
 HOST=127.0.0.1
 
-DATABASE_URL=postgres://${API_USER}:${API_DB_PASSWORD}@127.0.0.1:5432/voipapi
+DATABASE_URL=postgres://${API_USER}:${API_DB_PASSWORD}@${DB_HOST}:${DB_PORT}/voipapi
 
-REDIS_URL=redis://:${REDIS_PASSWORD:-}@127.0.0.1:6379
+# Kamailio's own database, which the API projects subscribers and trunks into. A separate
+# connection from the application database by design - different schema, different owner.
+KAMAILIO_DATABASE_URL=postgres://kamailio:${KAMAILIO_DB_PASSWORD}@${DB_HOST}:${DB_PORT}/kamailio
 
-FS_ESL_HOST=127.0.0.1
-FS_ESL_PORT=8021
+REDIS_URL=redis://:${REDIS_PASSWORD:-}@${REDIS_HOST}:${REDIS_PORT}
+
+FS_ESL_HOST=${FS_ESL_HOST}
+FS_ESL_PORT=${FS_ESL_PORT}
 FS_ESL_PASSWORD=${FS_ESL_PASSWORD}
+
+# Shared with FreeSWITCH's xml_curl binding (steps/31-freeswitch-config.sh) so the fallback
+# XML gateway can authenticate the machine calling it.
+FS_XML_GATEWAY_SECRET=${FS_XML_GATEWAY_SECRET}
+
+ENCRYPTION_KEY=${ENCRYPTION_KEY}
+AUTH_SECRET=${AUTH_SECRET}
 
 PBX_FQDN=${PBX_FQDN}
 PBX_SIP_DOMAIN=${PBX_SIP_DOMAIN}
@@ -72,6 +90,17 @@ fi
 
 ### --- Service --------------------------------------------------------------------------------
 
+### The API also runs on media nodes (for the mod_xml_curl call path), where Postgres and
+### Redis are not installed. A hard Requires= there would fail the unit on every boot, so the
+### local-database ordering is only declared when this host actually is the database.
+if has_role db; then
+  api_after="network-online.target postgresql.service redis-server.service"
+  api_requires="Requires=postgresql.service"
+else
+  api_after="network-online.target"
+  api_requires="# database is remote - no local ordering dependency"
+fi
+
 ### Determine the entrypoint: package.json start script wins, else a conventional filename.
 ENTRY="server.ts"
 for candidate in server.ts src/index.ts index.ts; do
@@ -83,9 +112,9 @@ write_file /etc/systemd/system/voip-api.service 0644 <<EOF || true
 [Unit]
 # Managed by the VoIP PBX installer.
 Description=VoIP PBX API
-After=network-online.target postgresql.service redis-server.service
+After=${api_after}
 Wants=network-online.target
-Requires=postgresql.service
+${api_requires}
 
 [Service]
 Type=simple

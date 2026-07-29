@@ -44,21 +44,45 @@ fi
 
 ### --- Identity -------------------------------------------------------------------------
 
+### hostnamectl talks to systemd-hostnamed over the system bus, which is not always available
+### - notably in containers and on minimal installs. Fall back to writing the file directly
+### rather than aborting the whole install over a hostname.
 if [ "$(hostnamectl --static 2>/dev/null)" != "$PBX_FQDN" ]; then
-  hostnamectl set-hostname "$PBX_FQDN"
-  info "Hostname set to $PBX_FQDN"
+  if hostnamectl set-hostname "$PBX_FQDN" 2>/dev/null; then
+    info "Hostname set to $PBX_FQDN"
+  else
+    printf '%s\n' "$PBX_FQDN" > /etc/hostname
+    hostname "$PBX_FQDN" 2>/dev/null || true
+    warn "hostnamectl unavailable (no system bus) - wrote /etc/hostname directly"
+  fi
 fi
 
 # Keep the FQDN resolvable locally so services that look up their own name do not stall.
+#
+# Written in place rather than with `sed -i`: sed replaces the file by renaming a temp over it,
+# which fails on a bind-mounted /etc/hosts (containers) with EBUSY. Truncate-and-write works
+# in both cases.
 short="${PBX_FQDN%%.*}"
 if ! grep -qE "^127\.0\.1\.1[[:space:]]+${PBX_FQDN}" /etc/hosts; then
-  sed -i "/^127\.0\.1\.1[[:space:]]/d" /etc/hosts
-  printf '127.0.1.1\t%s %s\n' "$PBX_FQDN" "$short" >> /etc/hosts
+  hosts_tmp="$(mktemp)"
+  grep -vE "^127\.0\.1\.1[[:space:]]" /etc/hosts > "$hosts_tmp" || true
+  printf '127.0.1.1\t%s %s\n' "$PBX_FQDN" "$short" >> "$hosts_tmp"
+  cat "$hosts_tmp" > /etc/hosts
+  rm -f "$hosts_tmp"
   info "Added $PBX_FQDN to /etc/hosts"
 fi
 
-timedatectl set-timezone "$TIMEZONE"
-ok "Timezone: $TIMEZONE"
+### Same reasoning as the hostname: timedatectl needs the system bus. /etc/localtime is what
+### actually matters to every process that reads local time.
+if timedatectl set-timezone "$TIMEZONE" 2>/dev/null; then
+  ok "Timezone: $TIMEZONE"
+elif [ -f "/usr/share/zoneinfo/$TIMEZONE" ]; then
+  ln -sf "/usr/share/zoneinfo/$TIMEZONE" /etc/localtime
+  printf '%s\n' "$TIMEZONE" > /etc/timezone
+  warn "timedatectl unavailable - set /etc/localtime directly ($TIMEZONE)"
+else
+  die "Unknown timezone '$TIMEZONE' - no /usr/share/zoneinfo entry."
+fi
 
 ### --- Time -----------------------------------------------------------------------------
 

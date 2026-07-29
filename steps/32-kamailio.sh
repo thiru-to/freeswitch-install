@@ -16,6 +16,9 @@ apt_add_repo "kamailio" \
   "http://deb.kamailio.org/kamailiodebkey.gpg" \
   "http://deb.kamailio.org/${KAMAILIO_REPO_VERSION} ${codename} main"
 
+### Each package here maps to modules kamailio.cfg actually loads. Missing one is not a
+### warning - Kamailio refuses to parse a config referencing a module it cannot find, so the
+### whole proxy fails to start.
 apt_install \
   kamailio \
   kamailio-postgres-modules \
@@ -24,7 +27,8 @@ apt_install \
   kamailio-utils-modules \
   kamailio-presence-modules \
   kamailio-json-modules \
-  kamailio-extra-modules
+  kamailio-extra-modules \
+  kamailio-websocket-modules   # websocket.so + xhttp.so, required for SIP over WSS (WebRTC)
 
 ### Stop the stock config from starting before 33-kamailio-config.sh has written a real one.
 ### The shipped default is a bare example that would briefly open a misconfigured proxy on

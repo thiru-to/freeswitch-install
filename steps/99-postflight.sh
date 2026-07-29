@@ -29,9 +29,19 @@ port_listening() {
   ss -ltnu 2>/dev/null | grep -qE "[:.]$1\b"
 }
 
+### Enumerate ONCE into a variable rather than piping systemctl into `grep -q` per unit.
+### `grep -q` exits at the first match, systemctl is killed by SIGPIPE, and under `pipefail`
+### the pipeline reports failure - so `|| continue` silently skipped every single service
+### check while the section still printed as if it had passed. Nothing is worse in a
+### verification step than one that quietly checks nothing.
+UNIT_FILES="$(systemctl list-unit-files --no-legend 2>/dev/null || true)"
+
 printf '\n--- Services ---\n'
-for unit in postgresql redis-server freeswitch kamailio rtpengine nginx voip-api fail2ban nftables; do
-  systemctl list-unit-files 2>/dev/null | grep -q "^${unit}" || continue
+for unit in postgresql redis-server freeswitch kamailio rtpengine-daemon nginx voip-api fail2ban nftables; do
+  case "$UNIT_FILES" in
+    *"${unit}.service"*) : ;;
+    *) continue ;;
+  esac
   check "$unit running" systemctl is-active --quiet "$unit"
 done
 
@@ -44,12 +54,16 @@ check "Postgres 5432"              port_listening 5432
 
 printf '\n--- Telephony ---\n'
 if [ -x "$PREFIX/bin/fs_cli" ]; then
-  check "FreeSWITCH responds on ESL" bash -c "$PREFIX/bin/fs_cli -x status | grep -q '^UP'"
-  check "Opus codec loaded"          bash -c "$PREFIX/bin/fs_cli -x 'show codec' | grep -qi opus"
-  check "SIP profile up"             bash -c "$PREFIX/bin/fs_cli -x 'sofia status' | grep -qi RUNNING"
+  check "FreeSWITCH responds on ESL" bash -c "$PREFIX/bin/fs_cli -p $FS_ESL_PASSWORD -x status | grep -q '^UP'"
+  check "Opus codec loaded"          bash -c "$PREFIX/bin/fs_cli -p $FS_ESL_PASSWORD -x 'show codec' | grep -qi opus"
+  check "SIP profile up"             bash -c "$PREFIX/bin/fs_cli -p $FS_ESL_PASSWORD -x 'sofia status' | grep -qi RUNNING"
 
   ### A clean boot log is a much stronger signal than 'the process is alive'.
-  errs="$(grep -icE '\[(ERR|CRIT)\]' "$PREFIX/log/freeswitch.log" 2>/dev/null || echo 0)"
+  ### `grep -c` exits 1 when the count is zero, so `|| echo 0` appended a SECOND line and
+  ### made this the two-line string "0\n0" - which then failed the numeric test and reported
+  ### a clean log as an error. Let grep print its own count and swallow the exit status.
+  errs="$(grep -icE '\[(ERR|CRIT)\]' "$PREFIX/log/freeswitch.log" 2>/dev/null || true)"
+  errs="${errs:-0}"
   checks=$((checks + 1))
   if [ "$errs" -eq 0 ]; then
     ok "No errors in the FreeSWITCH log"
@@ -63,6 +77,21 @@ fi
 
 check "Kamailio config valid" kamailio -c -f /etc/kamailio/kamailio.cfg
 check "rtpengine control socket" bash -c "ss -lun | grep -q ':${RTPENGINE_NG_PORT}'"
+
+if [ "${ENABLE_WEBRTC:-1}" = "1" ]; then
+  check "WSS ${WSS_PORT} listening" port_listening "${WSS_PORT}"
+  ### A browser refuses a WSS socket whose certificate does not match, so this is worth
+  ### checking separately from the port being open.
+  check "WSS presents a valid certificate" \
+    bash -c "echo | openssl s_client -connect 127.0.0.1:${WSS_PORT} -servername ${PBX_FQDN} 2>/dev/null | grep -q 'Verify return code: 0'"
+fi
+
+if [ "${ENABLE_STIR_SHAKEN:-0}" = "1" ]; then
+  mp="$(dirname "$(find /usr/lib -name 'tm.so' -path '*kamailio*' 2>/dev/null | head -1)")"
+  check "stirshaken module built" test -f "$mp/stirshaken.so"
+  check "STIR signing key present" test -f "${STIR_SHAKEN_KEY:-/etc/voip-pbx/stir/signing.key}"
+  check "STIR CA roots present" bash -c "[ -n \"\$(ls -A /etc/voip-pbx/stir/ca 2>/dev/null)\" ]"
+fi
 
 printf '\n--- Security ---\n'
 check "Firewall active"          bash -c "nft list ruleset | grep -q 'hook input'"
@@ -93,7 +122,7 @@ fi
 
 printf '\n--- Scheduled work ---\n'
 for timer in voip-backup.timer voip-maintenance.timer voip-healthcheck.timer; do
-  systemctl list-unit-files 2>/dev/null | grep -q "^${timer}" || continue
+  case "$UNIT_FILES" in *"${timer}"*) : ;; *) continue ;; esac
   check "$timer enabled" systemctl is-enabled --quiet "$timer"
 done
 

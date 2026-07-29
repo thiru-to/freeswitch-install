@@ -1,13 +1,19 @@
 {
   "name": "api",
   "scripts": {
-    "start": "NODE_ENV=production bun run server.ts",
-    "dev": "bun run --hot server.ts",
+    "start": "NODE_ENV=production bun run src/index.ts",
+    "dev": "bun run --hot src/index.ts",
+    "typecheck": "tsc --noEmit",
+    "db:generate": "drizzle-kit generate",
+    "db:push": "drizzle-kit push",
+    "db:studio": "drizzle-kit studio",
+    "auth:generate": "bunx @better-auth/cli generate --output src/db/auth-schema.ts",
     "format": "bunx prettier --write '**/*.{js,ts}'",
-    "format:check": "bunx prettier --check '**/*.{js,ts}'",
-    "typecheck": "tsc --noEmit"
+    "format:check": "bunx prettier --check '**/*.{js,ts}'"
   },
   "dependencies": {
+    "@better-auth/api-key": "^1.6.25",
+    "better-auth": "^1.6.25",
     "dotenv": "^17.4.2",
     "drizzle-orm": "^0.45.2",
     "hono": "^4.12.32",

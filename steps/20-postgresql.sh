@@ -24,6 +24,14 @@ CLUSTER_DIR="/etc/postgresql/${PG_VERSION}/main"
 
 ### --- Tuning ----------------------------------------------------------------------------
 
+### Bind loopback on an all-in-one box; add the internal address once roles are split, so the
+### sip/media/portal nodes can actually reach the database.
+if is_all_in_one; then
+  pg_listen="localhost"
+else
+  pg_listen="localhost,$(internal_bind_addr)"
+fi
+
 ### Sized from actual host memory rather than fixed numbers, so this behaves on both a small
 ### VM and a large one. Conservative general-purpose values; a busy CDR workload may want
 ### more work_mem, which is why this lives in its own drop-in you can edit.
@@ -39,7 +47,7 @@ install -d -m 0755 -o postgres -g postgres "${CLUSTER_DIR}/conf.d"
 write_file "${CLUSTER_DIR}/conf.d/90-voip.conf" 0644 postgres:postgres <<EOF || true
 # Managed by the VoIP PBX installer. Sized for a host with ${mem_mb}MB RAM.
 
-listen_addresses = 'localhost'
+listen_addresses = '${pg_listen}'
 max_connections = 200
 
 shared_buffers = ${shared_buffers}MB
@@ -74,14 +82,22 @@ EOF
 ### --- Access ----------------------------------------------------------------------------
 
 ### scram-sha-256 for local TCP; peer for the postgres superuser over the unix socket.
-### Nothing is reachable off-box - listen_addresses is localhost only.
-write_file "${CLUSTER_DIR}/pg_hba.conf" 0640 postgres:postgres <<'EOF' || true
+### Off-host access exists only once roles are split - on an all-in-one box the internal
+### line is deliberately absent rather than a permissive no-op.
+if is_all_in_one; then
+  pg_hba_internal="# (all-in-one: no off-host access)"
+else
+  pg_hba_internal="host    all             all             ${INTERNAL_CIDR}            scram-sha-256"
+fi
+
+write_file "${CLUSTER_DIR}/pg_hba.conf" 0640 postgres:postgres <<EOF || true
 # Managed by the VoIP PBX installer.
 # TYPE  DATABASE        USER            ADDRESS                 METHOD
 local   all             postgres                                peer
 local   all             all                                     scram-sha-256
 host    all             all             127.0.0.1/32            scram-sha-256
 host    all             all             ::1/128                 scram-sha-256
+${pg_hba_internal}
 EOF
 
 systemctl enable postgresql >/dev/null 2>&1 || true
@@ -91,5 +107,12 @@ else
   restart_service postgresql
 fi
 
+### The postgres superuser has no password by default - it authenticates by peer over the unix
+### socket. That is fine for us, but tools that connect over TCP need one: kamdbctl builds a
+### psql command with -h and then fails on a missing ~/.pgpass. Set it once and persist it.
+config_ensure_secret PG_SUPERUSER_PASSWORD 32
+su - postgres -c "psql -v ON_ERROR_STOP=1 -c \"ALTER ROLE postgres WITH PASSWORD '${PG_SUPERUSER_PASSWORD}'\"" >/dev/null
+ok "Superuser password set (for TCP admin tools such as kamdbctl)"
+
 su - postgres -c "psql -tAc 'SELECT version()'" | sed 's/^/  /'
-ok "PostgreSQL ${PG_VERSION} ready (localhost only, shared_buffers=${shared_buffers}MB)"
+ok "PostgreSQL ${PG_VERSION} ready (listening on ${pg_listen}, shared_buffers=${shared_buffers}MB)"

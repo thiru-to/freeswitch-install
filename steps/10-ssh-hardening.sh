@@ -67,6 +67,16 @@ if [ -f /etc/ssh/moduli ] && awk '$5 < 3071' /etc/ssh/moduli | grep -q .; then
   info "Removed weak DH moduli"
 fi
 
+### If there is no SSH server there is nothing to harden. That is a legitimate state on a
+### node provisioned by an image pipeline or console, so warn and move on rather than failing
+### the whole install. The config is already written and takes effect if sshd is added later.
+if ! command -v sshd >/dev/null 2>&1; then
+  warn "No SSH server installed - hardening config written but not applied."
+  ok "SSH hardening skipped (sshd absent)"
+  exit 0
+fi
+
 sshd -t || die "sshd configuration is invalid - not restarting. Fix $CONF first."
-systemctl reload ssh 2>/dev/null || systemctl reload sshd
+systemctl reload ssh 2>/dev/null || systemctl reload sshd 2>/dev/null || \
+  warn "Could not reload sshd - the config applies on its next restart."
 ok "SSH hardened (password auth $([ "$DISABLE_PASSWORDS" -eq 1 ] && echo disabled || echo "left enabled"))"
