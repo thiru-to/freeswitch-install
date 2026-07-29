@@ -12,7 +12,9 @@ import { fsXml } from "./routes/fs-xml";
 import { tenants } from "./routes/tenants";
 import { ping as redisPing } from "./services/redis";
 import { esl } from "./services/esl";
-import { pool } from "./db";
+import { pool, db } from "./db";
+import { tenantSettings } from "./db/schema";
+import { rebuildTenant } from "./services/cache";
 
 const app = new Hono();
 
@@ -75,6 +77,32 @@ app.onError((err, c) => {
   // Never leak internals to a client; the detail is in the journal.
   return c.json({ error: "Internal error" }, 500);
 });
+
+/**
+ * Warm the cache on startup.
+ *
+ * Redis is configured as a pure cache (`save ""`, `appendonly no` in steps/21-redis.sh), so a
+ * Redis restart loses every key. Nothing else rebuilds them: the write-through path only fires
+ * on a config change, so without this the cache stays empty until someone happens to edit
+ * something, and every lookup takes the slow fall-through path in the meantime.
+ *
+ * Deliberately non-fatal and not awaited. A cold cache is a performance problem, not a
+ * correctness one - the fall-through chain still resolves - so failing to warm must not stop
+ * the API from serving.
+ */
+async function warmCache(): Promise<void> {
+  try {
+    const tenants = await db.query.tenantSettings.findMany();
+    for (const tenant of tenants) {
+      await rebuildTenant(tenant.organizationId);
+    }
+    console.log(`[cache] warmed ${tenants.length} tenant(s)`);
+  } catch (err) {
+    console.warn("[cache] warm failed (serving from the fallback path):", (err as Error).message);
+  }
+}
+
+void warmCache();
 
 export default {
   port: env.port,

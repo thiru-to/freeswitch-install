@@ -26,7 +26,11 @@ config_ensure_secret FS_XML_GATEWAY_SECRET 32
 ###   mod_pgsql    - freeswitch.Dbh("pgsql://...") fails, so the Postgres fallback is dead
 ###   mod_spandsp  - fax silently does not answer
 ### The install asserts each one loaded at the end rather than trusting the config.
-FS_AUTOLOAD_ADD="mod_opus mod_lua mod_hiredis mod_pgsql mod_spandsp mod_voicemail mod_curl"
+### mod_xml_curl and mod_curl are DIFFERENT modules with confusingly similar names:
+###   mod_xml_curl - the XML gateway; this is the fallback binding. Without it the whole
+###                  fall-through tier is inert and a Redis miss resolves to nothing.
+###   mod_curl     - an HTTP client for Lua and the dialplan. Not a fallback for anything.
+FS_AUTOLOAD_ADD="mod_opus mod_lua mod_hiredis mod_pgsql mod_spandsp mod_voicemail mod_curl mod_xml_curl"
 
 ### --- Event socket -----------------------------------------------------------------------
 
