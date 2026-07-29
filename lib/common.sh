@@ -277,6 +277,33 @@ restart_service() {
   ok "$unit restarted"
 }
 
+### --- Bun helper ----------------------------------------------------------------------
+
+### Runs a bun command as an unprivileged user, with a cache and temp directory that user can
+### actually write.
+###
+### Without this, bun resolves its cache to $BUN_INSTALL/install/cache - which 40-bun.sh creates
+### as root - and every unprivileged `bun install` dies with "AccessDenied accessing temporary
+### directory". Whether it happens depends on whether root ever ran bun first, so it shows up on
+### some machines and not others, and never on one where the tree is already populated.
+###
+### Per-user rather than a shared group-writable cache: two service users sharing a package
+### cache is a way for one to poison the other's dependency tree.
+bun_as() {
+  local user="$1" dir="$2"
+  shift 2
+  local home cache
+  home="$(getent passwd "$user" | cut -d: -f6)"
+  [ -n "$home" ] && [ -d "$home" ] || home="$dir"
+  cache="$home/.bun-cache"
+
+  install -d -m 0755 -o "$user" -g "$user" "$cache" "$cache/tmp" 2>/dev/null || true
+
+  su -s /bin/bash -c \
+    "cd '$dir' && BUN_INSTALL_CACHE_DIR='$cache' BUN_TMPDIR='$cache/tmp' TMPDIR='$cache/tmp' $*" \
+    "$user"
+}
+
 ### --- Postgres helper ------------------------------------------------------------------
 
 psql_super() { su - postgres -c "psql -v ON_ERROR_STOP=1 $*"; }

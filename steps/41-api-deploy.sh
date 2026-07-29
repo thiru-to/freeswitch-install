@@ -82,15 +82,15 @@ EOF
 ### --- Dependencies and migrations ---------------------------------------------------------
 
 info "Installing dependencies"
-su -s /bin/bash -c "cd '$API_DIR' && bun install --frozen-lockfile --production" "$API_USER" \
-  || su -s /bin/bash -c "cd '$API_DIR' && bun install" "$API_USER" \
+bun_as "$API_USER" "$API_DIR" bun install --frozen-lockfile --production \
+  || bun_as "$API_USER" "$API_DIR" bun install \
   || die "bun install failed."
 
 if grep -q '"drizzle-kit"' "$API_DIR/package.json" 2>/dev/null && [ -f "$API_DIR/drizzle.config.ts" ]; then
   info "Applying database migrations"
   ### Migrations are the one step that can leave the database half-changed, so a failure here
   ### stops the deploy rather than starting an API against a schema it does not match.
-  su -s /bin/bash -c "cd '$API_DIR' && bunx drizzle-kit push --force" "$API_USER" \
+  bun_as "$API_USER" "$API_DIR" bunx drizzle-kit push --force \
     || die "Database migration failed - not starting the API against a mismatched schema."
   ok "Migrations applied"
 fi

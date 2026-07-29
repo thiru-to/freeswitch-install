@@ -10,12 +10,26 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as IndexRouteImport } from './routes/index'
+import { Route as CallFlowsRouteImport } from './routes/call-flows'
+import { Route as CallsRouteImport } from './routes/calls'
 import { Route as ExtensionsRouteImport } from './routes/extensions'
+import { Route as RoutingRouteImport } from './routes/routing'
 import { Route as SettingsRouteImport } from './routes/settings'
+import { Route as TrunksRouteImport } from './routes/trunks'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
   path: '/',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CallFlowsRoute = CallFlowsRouteImport.update({
+  id: '/call-flows',
+  path: '/call-flows',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CallsRoute = CallsRouteImport.update({
+  id: '/calls',
+  path: '/calls',
   getParentRoute: () => rootRouteImport,
 } as any)
 const ExtensionsRoute = ExtensionsRouteImport.update({
@@ -23,40 +37,88 @@ const ExtensionsRoute = ExtensionsRouteImport.update({
   path: '/extensions',
   getParentRoute: () => rootRouteImport,
 } as any)
+const RoutingRoute = RoutingRouteImport.update({
+  id: '/routing',
+  path: '/routing',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const SettingsRoute = SettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
   getParentRoute: () => rootRouteImport,
 } as any)
+const TrunksRoute = TrunksRouteImport.update({
+  id: '/trunks',
+  path: '/trunks',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
+  '/call-flows': typeof CallFlowsRoute
+  '/calls': typeof CallsRoute
   '/extensions': typeof ExtensionsRoute
+  '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
+  '/trunks': typeof TrunksRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
+  '/call-flows': typeof CallFlowsRoute
+  '/calls': typeof CallsRoute
   '/extensions': typeof ExtensionsRoute
+  '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
+  '/trunks': typeof TrunksRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
+  '/call-flows': typeof CallFlowsRoute
+  '/calls': typeof CallsRoute
   '/extensions': typeof ExtensionsRoute
+  '/routing': typeof RoutingRoute
   '/settings': typeof SettingsRoute
+  '/trunks': typeof TrunksRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/extensions' | '/settings'
+  fullPaths:
+    | '/'
+    | '/call-flows'
+    | '/calls'
+    | '/extensions'
+    | '/routing'
+    | '/settings'
+    | '/trunks'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/extensions' | '/settings'
-  id: '__root__' | '/' | '/extensions' | '/settings'
+  to:
+    | '/'
+    | '/call-flows'
+    | '/calls'
+    | '/extensions'
+    | '/routing'
+    | '/settings'
+    | '/trunks'
+  id:
+    | '__root__'
+    | '/'
+    | '/call-flows'
+    | '/calls'
+    | '/extensions'
+    | '/routing'
+    | '/settings'
+    | '/trunks'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
+  CallFlowsRoute: typeof CallFlowsRoute
+  CallsRoute: typeof CallsRoute
   ExtensionsRoute: typeof ExtensionsRoute
+  RoutingRoute: typeof RoutingRoute
   SettingsRoute: typeof SettingsRoute
+  TrunksRoute: typeof TrunksRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -68,11 +130,32 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof IndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/call-flows': {
+      id: '/call-flows'
+      path: '/call-flows'
+      fullPath: '/call-flows'
+      preLoaderRoute: typeof CallFlowsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/calls': {
+      id: '/calls'
+      path: '/calls'
+      fullPath: '/calls'
+      preLoaderRoute: typeof CallsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/extensions': {
       id: '/extensions'
       path: '/extensions'
       fullPath: '/extensions'
       preLoaderRoute: typeof ExtensionsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/routing': {
+      id: '/routing'
+      path: '/routing'
+      fullPath: '/routing'
+      preLoaderRoute: typeof RoutingRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/settings': {
@@ -82,13 +165,24 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/trunks': {
+      id: '/trunks'
+      path: '/trunks'
+      fullPath: '/trunks'
+      preLoaderRoute: typeof TrunksRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
+  CallFlowsRoute: CallFlowsRoute,
+  CallsRoute: CallsRoute,
   ExtensionsRoute: ExtensionsRoute,
+  RoutingRoute: RoutingRoute,
   SettingsRoute: SettingsRoute,
+  TrunksRoute: TrunksRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

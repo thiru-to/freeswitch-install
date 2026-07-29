@@ -59,9 +59,15 @@ function HealthBadge() {
   );
 }
 
+/* Ordered the way a call travels: it arrives on a trunk, a route decides where it lands, a
+   call flow answers it, and the result shows up in Calls. */
 const NAV = [
   { to: "/", label: "Dashboard" },
   { to: "/extensions", label: "Extensions" },
+  { to: "/trunks", label: "Trunks" },
+  { to: "/routing", label: "Routing" },
+  { to: "/call-flows", label: "Call flows" },
+  { to: "/calls", label: "Calls" },
   { to: "/settings", label: "Settings" },
 ] as const;
 

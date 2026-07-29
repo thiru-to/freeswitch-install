@@ -58,11 +58,25 @@ function CreateExtensionModal({
     return (
       <Modal opened={opened} onClose={reset} title={`Extension ${created.number} created`}>
         <Stack>
-          <Alert color="yellow" title="Save this password now">
-            It is stored encrypted and cannot be shown again. Configure the handset with it
-            before closing this dialog.
+          <Alert color="yellow" title="Save these now">
+            Both are stored encrypted and cannot be shown again. The PIN can be reset later; the
+            SIP password cannot be recovered, only replaced.
           </Alert>
-          <Code block>{created.sipPassword}</Code>
+          <div>
+            <Text size="sm" fw={500}>
+              SIP password — for the handset
+            </Text>
+            <Code block>{created.sipPassword}</Code>
+          </div>
+          <div>
+            <Text size="sm" fw={500}>
+              Voicemail PIN — for the user
+            </Text>
+            <Code block>{created.voicemailPin}</Code>
+            <Text size="xs" c="dimmed" mt={4}>
+              Dial *97 from the extension to listen, *98 from any other phone.
+            </Text>
+          </div>
           <Button onClick={reset}>Done</Button>
         </Stack>
       </Modal>

@@ -6,7 +6,8 @@ import tseslint from 'typescript-eslint'
 import { defineConfig, globalIgnores } from 'eslint/config'
 
 export default defineConfig([
-  globalIgnores(['dist']),
+  // routeTree.gen.ts is written by the TanStack Router plugin on every build.
+  globalIgnores(['dist', 'src/routeTree.gen.ts']),
   {
     files: ['**/*.{ts,tsx}'],
     extends: [
@@ -18,5 +19,15 @@ export default defineConfig([
     languageOptions: {
       globals: globals.browser,
     },
+  },
+  {
+    /*
+     * TanStack Router's file-route convention requires each route module to export a `Route`
+     * object alongside its components, which react-refresh/only-export-components forbids by
+     * construction. The rule cannot be satisfied without abandoning file routes, so leaving it
+     * on just means `bun run lint` is permanently red and stops being a signal anyone reads.
+     */
+    files: ['src/routes/**/*.tsx'],
+    rules: { 'react-refresh/only-export-components': 'off' },
   },
 ])

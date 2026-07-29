@@ -38,12 +38,12 @@ VITE_SIP_DOMAIN=${PBX_SIP_DOMAIN}
 EOF
 
 info "Installing portal dependencies"
-su -s /bin/bash -c "cd '$BUILD_DIR' && bun install --frozen-lockfile" "$BUILD_USER" \
-  || su -s /bin/bash -c "cd '$BUILD_DIR' && bun install" "$BUILD_USER" \
+bun_as "$BUILD_USER" "$BUILD_DIR" bun install --frozen-lockfile \
+  || bun_as "$BUILD_USER" "$BUILD_DIR" bun install \
   || die "bun install failed for the portal."
 
 info "Building the portal"
-su -s /bin/bash -c "cd '$BUILD_DIR' && bun run build" "$BUILD_USER" \
+bun_as "$BUILD_USER" "$BUILD_DIR" bun run build \
   || die "Portal build failed."
 
 [ -d "$BUILD_DIR/dist" ] || die "Build produced no dist/ directory."

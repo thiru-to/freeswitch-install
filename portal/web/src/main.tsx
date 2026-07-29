@@ -20,6 +20,19 @@ const queryClient = new QueryClient({
     queries: {
       staleTime: 30_000,
       refetchOnWindowFocus: true,
+      /**
+       * Try regardless of what the browser thinks about connectivity.
+       *
+       * The default (`networkMode: "online"`) parks a query in `fetchStatus: "paused"` whenever
+       * the online-manager believes there is no network - it never runs, never errors, and the
+       * UI sits on a spinner with nothing to explain it. That was observed here with
+       * `navigator.onLine === true`, which is the point: onLine is a guess about whether any
+       * interface is up, not about whether this API is reachable.
+       *
+       * The API is same-origin on the operator's own network. Attempting and failing gives them
+       * a message; refusing to attempt gives them a spinner.
+       */
+      networkMode: "always",
       // A 401 or 403 will not resolve by trying again - only network and 5xx are worth a retry.
       retry: (failureCount, error) => {
         const status = (error as { status?: number })?.status;
@@ -27,6 +40,9 @@ const queryClient = new QueryClient({
         return failureCount < 2;
       },
     },
+    // Same reasoning: a config change that silently refuses to be sent is worse than one that
+    // fails and says so.
+    mutations: { networkMode: "always" },
   },
 });
 
