@@ -306,6 +306,142 @@ write_file "$CONF/autoload_configs/hiredis.conf.xml" 0640 freeswitch:freeswitch 
 </configuration>
 EOF
 
+### --- Voicemail -----------------------------------------------------------------------------
+
+### Written before the autoload loop below, which copies a module's vanilla config only when
+### none exists - so this file has to be in place first or it gets shadowed on a fresh install.
+###
+### Storage layout is $${storage_dir}/voicemail/default/<domain>/<mailbox>, so tenants are
+### already separated by the SIP domain. No extra per-tenant storage-dir is needed.
+VM_MAX_RECORD_LEN="${VM_MAX_RECORD_LEN:-300}"
+MAIL_FROM_NAME="${MAIL_FROM_NAME:-Phone System}"
+SMTP_FROM="${SMTP_FROM:-pbx@${PBX_FQDN}}"
+
+write_file "$CONF/autoload_configs/voicemail.conf.xml" 0644 freeswitch:freeswitch <<EOF || true
+<configuration name="voicemail.conf" description="Voicemail">
+  <!-- Managed by the VoIP PBX installer. -->
+  <profiles>
+    <profile name="default">
+      <param name="file-extension" value="wav"/>
+      <param name="terminator-key" value="#"/>
+      <param name="max-login-attempts" value="3"/>
+      <param name="digit-timeout" value="10000"/>
+      <param name="min-record-len" value="3"/>
+      <param name="max-record-len" value="${VM_MAX_RECORD_LEN}"/>
+      <param name="max-retries" value="3"/>
+      <param name="tone-spec" value="%(1000, 0, 640)"/>
+      <param name="callback-dialplan" value="XML"/>
+      <param name="callback-context" value="default"/>
+
+      <!-- OFF, unlike the stock config. With it on, a mailbox whose directory entry carries no
+           password is enterable by anyone who reaches the login prompt - and in a multi-tenant
+           system that prompt is reachable from any tenant's phone. The API always emits
+           vm-password, so this only ever fires on a misconfiguration; failing closed there is
+           the whole point. -->
+      <param name="allow-empty-password-auth" value="false"/>
+
+      <!-- false: the PIN a user sets from the phone menu is checked, and so is the one in the
+           directory. That means a portal-side PIN reset is always a way back into a mailbox
+           whose owner has forgotten what they set - which is the support call that actually
+           happens. -->
+      <param name="db-password-override" value="false"/>
+
+      <param name="play-new-messages-key" value="1"/>
+      <param name="play-saved-messages-key" value="2"/>
+      <param name="login-keys" value="0"/>
+      <param name="main-menu-key" value="0"/>
+      <param name="config-menu-key" value="5"/>
+      <param name="record-greeting-key" value="1"/>
+      <param name="choose-greeting-key" value="2"/>
+      <param name="change-pass-key" value="6"/>
+      <param name="record-name-key" value="3"/>
+      <param name="record-file-key" value="3"/>
+      <param name="listen-file-key" value="1"/>
+      <param name="save-file-key" value="2"/>
+      <param name="delete-file-key" value="7"/>
+      <param name="undelete-file-key" value="8"/>
+      <param name="email-key" value="4"/>
+      <param name="pause-key" value="0"/>
+      <param name="restart-key" value="1"/>
+      <param name="ff-key" value="6"/>
+      <param name="rew-key" value="4"/>
+      <param name="skip-greet-key" value="#"/>
+      <param name="previous-message-key" value="1"/>
+      <param name="next-message-key" value="3"/>
+      <param name="skip-info-key" value="*"/>
+      <param name="repeat-message-key" value="0"/>
+      <param name="record-silence-threshold" value="200"/>
+      <param name="record-silence-hits" value="2"/>
+      <param name="web-template-file" value="web-vm.tpl"/>
+
+      <!-- The operator key sends the caller to extension 'operator'. There is no such extension
+           by default, so it is left unbound rather than dead-ending a caller who presses 9. -->
+      <param name="vmain-extension" value="vmain XML default"/>
+      <param name="vmain-key" value="*"/>
+
+      <email>
+        <param name="template-file" value="voicemail.tpl"/>
+        <param name="notify-template-file" value="notify-voicemail.tpl"/>
+        <param name="date-fmt" value="%A, %B %d %Y, %I:%M %p"/>
+        <!-- Sends as the platform, NOT as \${voicemail_account}@\${voicemail_domain} which the
+             stock config uses. A tenant's SIP domain is not a domain we can prove we send for,
+             so SPF and DKIM fail alignment and the mail lands in spam or is rejected outright.
+             The caller is identified in the subject, body and Reply-To instead. -->
+        <param name="email-from" value="${SMTP_FROM}"/>
+      </email>
+    </profile>
+  </profiles>
+</configuration>
+EOF
+
+### Email bodies. The vanilla templates declare ISO-8859-1 and 7bit, which mangles any caller ID
+### name outside ASCII; these declare UTF-8. They also put the platform address in From: and the
+### caller in Reply-To, matching the email-from reasoning above.
+write_file "$CONF/voicemail.tpl" 0644 freeswitch:freeswitch <<EOF || true
+From: "${MAIL_FROM_NAME}" <${SMTP_FROM}>
+Reply-To: "\${voicemail_caller_id_name}" <\${voicemail_caller_id_number}@\${voicemail_domain}>
+Date: \${RFC2822_DATE}
+To: \${voicemail_email}
+Subject: Voicemail from \${voicemail_caller_id_name} (\${voicemail_caller_id_number}) - \${voicemail_message_len}
+X-Priority: \${voicemail_priority}
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+New voicemail for \${voicemail_account}@\${voicemail_domain}
+
+  From:     \${voicemail_caller_id_name} (\${voicemail_caller_id_number})
+  Received: \${voicemail_time}
+  Duration: \${voicemail_message_len}
+
+The recording is attached. It also remains in your mailbox - dial *97 from your phone to
+listen, or open the portal.
+EOF
+
+write_file "$CONF/notify-voicemail.tpl" 0644 freeswitch:freeswitch <<EOF || true
+From: "${MAIL_FROM_NAME}" <${SMTP_FROM}>
+Date: \${RFC2822_DATE}
+To: <\${voicemail_notify_email}>
+Subject: Voicemail from \${voicemail_caller_id_name} (\${voicemail_caller_id_number}) - \${voicemail_message_len}
+X-Priority: \${voicemail_priority}
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+New voicemail for \${voicemail_account}@\${voicemail_domain}
+
+  From:     \${voicemail_caller_id_name} (\${voicemail_caller_id_number})
+  Received: \${voicemail_time}
+  Duration: \${voicemail_message_len}
+
+Dial *97 from your phone to listen.
+EOF
+
+if [ -f /usr/src/freeswitch/conf/vanilla/web-vm.tpl ] && [ ! -f "$CONF/web-vm.tpl" ]; then
+  install -m 0644 -o freeswitch -g freeswitch \
+    /usr/src/freeswitch/conf/vanilla/web-vm.tpl "$CONF/web-vm.tpl"
+fi
+
 ### --- xml_curl, bound second ------------------------------------------------------------------
 
 ### Bindings fall through: switch_xml.c loops over them and continues past any that returns

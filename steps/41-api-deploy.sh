@@ -70,6 +70,13 @@ AUTH_SECRET=${AUTH_SECRET}
 
 PBX_FQDN=${PBX_FQDN}
 PBX_SIP_DOMAIN=${PBX_SIP_DOMAIN}
+
+# Sender for fax-to-email. Matches what steps/15-mail.sh gave msmtp and what FreeSWITCH's
+# voicemail templates use, so every notification the platform sends comes from one address that
+# SPF and DKIM can be aligned to.
+SMTP_FROM=${SMTP_FROM:-pbx@${PBX_FQDN}}
+MAIL_FROM_NAME=${MAIL_FROM_NAME:-Phone System}
+MAIL_REPLY_TO=${MAIL_REPLY_TO:-}
 EOF
 
 ### --- Dependencies and migrations ---------------------------------------------------------

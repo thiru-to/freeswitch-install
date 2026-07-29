@@ -8,6 +8,7 @@ import { randomUUID } from "node:crypto";
 import { eq } from "drizzle-orm";
 import { db } from "../db";
 import { fax, tenantSettings } from "../db/schema";
+import { env } from "../env";
 
 export type FaxReport = {
   callUuid: string;
@@ -56,6 +57,19 @@ async function convertToPdf(tiffPath: string): Promise<string | null> {
  * be absent on a fresh box - it warns rather than failing, because the fax is already stored
  * and downloadable from the portal. Install msmtp-mta or postfix to enable delivery.
  */
+/**
+ * RFC 2047 encodes a header value if it is not plain ASCII.
+ *
+ * The subject carries the sender's caller ID, which is remote-supplied - a non-ASCII byte in a
+ * raw header is a protocol violation, and a CR or LF there is header injection.
+ */
+function encodeHeader(value: string): string {
+  const clean = value.replace(/[\r\n]/g, " ");
+  // eslint-disable-next-line no-control-regex
+  if (!/[^\x20-\x7E]/.test(clean)) return clean;
+  return `=?UTF-8?B?${Buffer.from(clean, "utf8").toString("base64")}?=`;
+}
+
 async function deliverByEmail(
   to: string,
   subject: string,
@@ -72,8 +86,14 @@ async function deliverByEmail(
   }
 
   const boundary = `----voipfax-${randomUUID()}`;
+  /* From and Date are set explicitly rather than left to the MTA. msmtp would fill From in from
+     its own config, but a different MTA uses the local system user - and a message with no Date
+     is scored as spam by most receivers. */
+  const replyTo = env.mailReplyTo ? `Reply-To: ${env.mailReplyTo}\r\n` : "";
   let message =
-    `To: ${to}\r\nSubject: ${subject}\r\nMIME-Version: 1.0\r\n` +
+    `From: "${env.mailFromName}" <${env.mailFrom}>\r\n${replyTo}` +
+    `To: ${to}\r\nDate: ${new Date().toUTCString()}\r\n` +
+    `Subject: ${encodeHeader(subject)}\r\nMIME-Version: 1.0\r\n` +
     `Content-Type: multipart/mixed; boundary="${boundary}"\r\n\r\n` +
     `--${boundary}\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n${body}\r\n`;
 

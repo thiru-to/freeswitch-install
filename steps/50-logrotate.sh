@@ -57,6 +57,22 @@ write_file /etc/logrotate.d/voip-nginx 0644 <<'EOF' || true
 }
 EOF
 
+### msmtp writes its own file rather than the journal - it runs as a one-shot child of whichever
+### service is sending, so there is no unit to attribute the output to. One line per message,
+### and it is the only record of a voicemail or fax that failed to deliver.
+write_file /etc/logrotate.d/voip-msmtp 0644 <<'EOF' || true
+# Managed by the VoIP PBX installer.
+/var/log/msmtp.log {
+    monthly
+    rotate 12
+    missingok
+    notifempty
+    compress
+    delaycompress
+    create 0660 root msmtp
+}
+EOF
+
 ### Kamailio, rtpengine and the API all log to the journal, so their retention is a journald
 ### setting rather than a logrotate one.
 write_file /etc/systemd/journald.conf.d/90-voip.conf 0644 <<'EOF' || true

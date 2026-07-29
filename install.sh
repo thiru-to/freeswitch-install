@@ -44,6 +44,7 @@ STEPS=(
   "12-fail2ban.sh|all|Jails for sshd, FreeSWITCH (mod_fail2ban) and Kamailio"
   "13-tls-certs.sh|all|Let's Encrypt certificates + renewal hooks for SIP TLS, WSS and the API"
   "14-responsive-firewall.sh|sip|Reputation-tiered SIP rate limiting, learned from live registrations"
+  "15-mail.sh|all|Outbound SMTP relay (msmtp) for voicemail-to-email and fax-to-email"
 
   "20-postgresql.sh|db|PostgreSQL 18 from PGDG, pg_hba, tuning, WAL/backup prep"
   "21-redis.sh|db|Redis for mod_hiredis and API caching"

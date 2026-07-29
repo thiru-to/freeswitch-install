@@ -74,3 +74,26 @@ export function generateSipPassword(length = 24): string {
   }
   return out;
 }
+
+/**
+ * Generates a voicemail PIN.
+ *
+ * Digits only, because it is entered on a phone keypad - the SIP password cannot serve here
+ * even though mod_voicemail will fall back to it, since an alphanumeric secret is untypable on
+ * a handset and the mailbox is then simply unreachable.
+ *
+ * Rejects the two PINs a user would report as broken rather than as a coincidence: all-same
+ * digits and the extension-shaped ascending run.
+ */
+export function generateVoicemailPin(length = 6): string {
+  for (;;) {
+    const bytes = randomBytes(length);
+    let pin = "";
+    for (let i = 0; i < length; i++) {
+      pin += String(bytes[i]! % 10);
+    }
+    if (/^(\d)\1*$/.test(pin)) continue;
+    if ("0123456789012345".includes(pin)) continue;
+    return pin;
+  }
+}

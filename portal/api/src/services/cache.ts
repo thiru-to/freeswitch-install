@@ -50,18 +50,34 @@ function renderDirectoryUser(
   ext: typeof extension.$inferSelect,
   tenant: typeof tenantSettings.$inferSelect,
   password: string,
+  voicemailPin: string | null,
 ): string {
   const cacheMs = ext.directoryCacheMs ?? tenant.directoryCacheMs;
   const codecs = ext.codecPrefs ?? "OPUS,G722,PCMU,PCMA";
   const callerName = ext.callerIdName ?? tenant.defaultCallerIdName ?? ext.displayName;
   const callerNumber = ext.callerIdNumber ?? tenant.defaultCallerIdNumber ?? ext.number;
 
+  /* mod_voicemail falls back to the `password` param when `vm-password` is absent, which means
+     an unset PIN silently makes the mailbox require the 24-character random SIP password on a
+     numeric keypad - unreachable rather than insecure, and confusing to diagnose. */
+  const vmPin = voicemailPin
+    ? `<param name="vm-password" value="${escapeXml(voicemailPin)}"/>`
+    : "";
+  /* vm-attach-file is what makes the notification useful; without it the email says a message
+     arrived and the user still has to call in to hear it. */
+  const vmEmail = ext.voicemailEmail
+    ? `<param name="vm-email-all-messages" value="true"/>
+    <param name="vm-attach-file" value="true"/>
+    <param name="vm-keep-local-after-email" value="true"/>
+    <param name="vm-mailto" value="${escapeXml(ext.voicemailEmail)}"/>`
+    : "";
+
   return `<user id="${ext.number}" cacheable="${cacheMs}">
   <params>
     <param name="password" value="${escapeXml(password)}"/>
     <param name="vm-enabled" value="${ext.voicemailEnabled ? "true" : "false"}"/>
-    ${ext.voicemailEmail ? `<param name="vm-email-all-messages" value="true"/>
-    <param name="vm-mailto" value="${escapeXml(ext.voicemailEmail)}"/>` : ""}
+    ${vmPin}
+    ${vmEmail}
   </params>
   <variables>
     <variable name="organization_id" value="${ext.organizationId}"/>
@@ -103,7 +119,8 @@ export async function cacheExtension(extensionId: string): Promise<void> {
   }
 
   const password = decrypt(ext.sipPasswordEnc);
-  const xml = renderDirectoryUser(ext, tenant, password);
+  const pin = ext.voicemailPinEnc ? decrypt(ext.voicemailPinEnc) : null;
+  const xml = renderDirectoryUser(ext, tenant, password, pin);
 
   await safeSet(keys.directory(tenant.sipDomain, ext.number), xml);
   // Drop FreeSWITCH's own copy so the edit is visible on the next lookup rather than after

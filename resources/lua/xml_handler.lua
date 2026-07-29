@@ -193,6 +193,14 @@ local function action(app, data)
   )
 end
 
+--[[ The condition is a PCRE, so the dialled string has to be escaped as a regex before it is
+     escaped as XML. Feature codes are the case that makes this load-bearing: `^*97$` is not a
+     valid pattern - the quantifier has nothing to repeat - so an unescaped *97 silently never
+     matches and the caller hears nothing. ]]
+local function regex_escape(s)
+  return (s:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?{}|\\]", "\\%0"))
+end
+
 local function extension_xml(name, destination, actions)
   return string.format(
     [[      <extension name="%s">
@@ -201,7 +209,7 @@ local function extension_xml(name, destination, actions)
         </condition>
       </extension>]],
     xml_escape(name),
-    xml_escape(destination),
+    xml_escape(regex_escape(destination)),
     table.concat(actions, "\n")
   )
 end
@@ -293,6 +301,33 @@ function M.dialplan(req, p)
         context_xml(context, extension_xml("emergency", destination, build_outbound(route, destination, tenant)))
       )
     end
+  end
+
+  --[[ 1b. Feature codes, before the directory so a tenant cannot shadow one with an extension.
+
+       *97 checks your own mailbox and skips the PIN, because Kamailio already authenticated the
+       registration this call came from - the same trust FreePBX places in it. *98 prompts for a
+       mailbox and PIN, which is how you reach a mailbox from someone else's desk.
+
+       The caller identity comes from the X-Auth-User header the ingress route stamps on, not
+       from the From: user: From is attacker-chosen, and trusting it would let anyone listen to
+       anyone's voicemail by editing one field in their softphone. ]]
+  if destination == "*97" or destination == "*98" then
+    local caller = p:getHeader("variable_sip_h_X-Auth-User") or p:getHeader("Caller-Username")
+    local vm_args
+    if destination == "*97" and caller then
+      vm_args = string.format("check auth default %s %s", domain, caller)
+    else
+      if destination == "*97" then
+        log("warning", "*97 from %s with no authenticated user - prompting for a mailbox", domain)
+      end
+      vm_args = string.format("check default %s", domain)
+    end
+    return document("dialplan", context_xml(context, extension_xml("voicemail_check", destination, {
+      action("answer", ""),
+      action("sleep", "500"),
+      action("voicemail", vm_args),
+    })))
   end
 
   -- 2. Internal extension.
