@@ -33,41 +33,67 @@ import { requireTenant, type AppEnv } from "../middleware/tenant";
  * Destinations appear on inbound routes, IVR options, ring-group failover and both branches of
  * a time condition, and every one of them is an id the client supplies. Without this a tenant
  * can point their call flow at another tenant's ring group or IVR.
+ *
+ * `prevType`/`prevId` are the values already on the row, and passing them is not optional on an
+ * update. A PATCH carries only what is changing, so `{destinationId: "<other tenant's id>"}`
+ * arrives with no type at all - and checking the body alone reads that as "no destination
+ * given" and waves it through. The pair has to be validated as it will exist after the write,
+ * not as it appears in the request.
  */
 async function badDestination(
   type: unknown,
   id: unknown,
   organizationId: string,
+  prevType?: unknown,
+  prevId?: unknown,
 ): Promise<string | null> {
-  if (type === undefined || type === null) return null;
+  const effectiveType = type !== undefined ? type : prevType;
+  const effectiveId = id !== undefined ? id : prevId;
 
-  // These carry no row reference: `external` holds a literal number, the others nothing.
-  if (type === "external" || type === "hangup" || type === "voicemail" || type === "fax") {
+  if (effectiveType === undefined || effectiveType === null) {
+    // An id with nothing to interpret it is not a harmless no-op: it is the shape the
+    // cross-tenant write takes, and there is no legitimate request that produces it.
+    if (effectiveId !== undefined && effectiveId !== null && effectiveId !== "") {
+      return "destinationType is required when destinationId is set";
+    }
     return null;
   }
-  if (id === undefined || id === null || id === "") {
-    return `destinationId is required when destinationType is ${String(type)}`;
+
+  // These carry no row reference: `external` holds a literal number, the others nothing.
+  if (
+    effectiveType === "external" || effectiveType === "hangup" ||
+    effectiveType === "voicemail" || effectiveType === "fax"
+  ) {
+    return null;
+  }
+  if (effectiveId === undefined || effectiveId === null || effectiveId === "") {
+    return `destinationId is required when destinationType is ${String(effectiveType)}`;
   }
 
+  const type_ = effectiveType;
+  const id_ = effectiveId;
+
   const owned = await (async () => {
-    switch (type) {
+    switch (type_) {
       case "extension":
-        return tenantOwns(extension, extension.organizationId, extension.id, id, organizationId);
+        return tenantOwns(extension, extension.organizationId, extension.id, id_, organizationId);
       case "ring_group":
-        return tenantOwns(ringGroup, ringGroup.organizationId, ringGroup.id, id, organizationId);
+        return tenantOwns(ringGroup, ringGroup.organizationId, ringGroup.id, id_, organizationId);
       case "ivr":
-        return tenantOwns(ivrMenu, ivrMenu.organizationId, ivrMenu.id, id, organizationId);
+        return tenantOwns(ivrMenu, ivrMenu.organizationId, ivrMenu.id, id_, organizationId);
       case "time_condition":
         return tenantOwns(
-          timeCondition, timeCondition.organizationId, timeCondition.id, id, organizationId);
+          timeCondition, timeCondition.organizationId, timeCondition.id, id_, organizationId);
       case "queue":
-        return tenantOwns(queue, queue.organizationId, queue.id, id, organizationId);
+        return tenantOwns(queue, queue.organizationId, queue.id, id_, organizationId);
       default:
         return false;
     }
   })();
 
-  return owned ? null : `destination ${String(type)}/${String(id)} does not belong to this tenant`;
+  return owned
+    ? null
+    : `destination ${String(type_)}/${String(id_)} does not belong to this tenant`;
 }
 
 /* ---------------------------------------------------------------------------------------
@@ -150,8 +176,10 @@ export const inboundRoutes = crudRoutes({
   entityType: "inbound_route",
   required: ["didPattern", "destinationType"],
   writable: ["didPattern", "description", "destinationType", "destinationId", "priority", "enabled"],
-  validate: async (body, organizationId) =>
-    badDestination(body.destinationType, body.destinationId, organizationId),
+  validate: async (body, organizationId, existing) =>
+    badDestination(
+      body.destinationType, body.destinationId, organizationId,
+      existing?.destinationType, existing?.destinationId),
   afterChange: async (organizationId) => {
     await cacheInboundRoutes(organizationId);
   },
@@ -167,7 +195,7 @@ export const outboundRoutes = crudRoutes({
     "name", "pattern", "trunkId", "stripDigits", "prependDigits",
     "callerIdOverride", "priority", "isEmergency", "enabled",
   ],
-  validate: async (body, organizationId) => {
+  validate: async (body, organizationId, existing) => {
     // A trunk belonging to another tenant would route this tenant's calls out through
     // someone else's carrier, billed to them.
     if (body.trunkId !== undefined && body.trunkId !== null) {
@@ -186,7 +214,13 @@ export const outboundRoutes = crudRoutes({
     }
     // Emergency routes bypass concurrent limits and time conditions by design, so flagging
     // one is a deliberate act that should not be possible by accident on a normal route.
-    if (body.isEmergency === true && !body.trunkId) {
+    // Merged with the stored row for the same reason as the destination pairs: marking an
+    // existing route as emergency sends only isEmergency, and reading the body alone would
+    // reject it for having no trunk when it has had one all along.
+    const effectiveTrunk = body.trunkId !== undefined ? body.trunkId : existing?.trunkId;
+    const effectiveEmergency =
+      body.isEmergency !== undefined ? body.isEmergency : existing?.isEmergency;
+    if (effectiveEmergency === true && !effectiveTrunk) {
       return "an emergency route must have a trunk - it is the one route that must always work";
     }
     return null;
@@ -211,8 +245,10 @@ export const ringGroups = crudRoutes({
   writable: [
     "number", "name", "strategy", "ringTimeoutSec", "failoverType", "failoverId", "enabled",
   ],
-  validate: async (body, organizationId) =>
-    badDestination(body.failoverType, body.failoverId, organizationId),
+  validate: async (body, organizationId, existing) =>
+    badDestination(
+      body.failoverType, body.failoverId, organizationId,
+      existing?.failoverType, existing?.failoverId),
   afterChange: async (organizationId) => {
     await rebuildTenant(organizationId);
   },
@@ -310,8 +346,10 @@ export const ivrMenus = crudRoutes({
     "number", "name", "greetingSound", "invalidSound", "timeoutSec",
     "maxRetries", "timeoutType", "timeoutId", "enabled",
   ],
-  validate: async (body, organizationId) =>
-    badDestination(body.timeoutType, body.timeoutId, organizationId),
+  validate: async (body, organizationId, existing) =>
+    badDestination(
+      body.timeoutType, body.timeoutId, organizationId,
+      existing?.timeoutType, existing?.timeoutId),
   afterChange: async (organizationId) => {
     await rebuildTenant(organizationId);
   },
@@ -387,10 +425,14 @@ export const timeConditions = crudRoutes({
   writable: [
     "name", "timezone", "rules", "matchType", "matchId", "noMatchType", "noMatchId", "enabled",
   ],
-  validate: async (body, organizationId) => {
-    const matchProblem = await badDestination(body.matchType, body.matchId, organizationId);
+  validate: async (body, organizationId, existing) => {
+    const matchProblem = await badDestination(
+      body.matchType, body.matchId, organizationId,
+      existing?.matchType, existing?.matchId);
     if (matchProblem) return matchProblem;
-    const noMatchProblem = await badDestination(body.noMatchType, body.noMatchId, organizationId);
+    const noMatchProblem = await badDestination(
+      body.noMatchType, body.noMatchId, organizationId,
+      existing?.noMatchType, existing?.noMatchId);
     if (noMatchProblem) return noMatchProblem;
 
     // The rules are evaluated by Lua at call time, where a malformed shape means the condition

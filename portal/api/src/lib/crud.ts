@@ -40,8 +40,19 @@ export type CrudOptions<T extends PgTable> = {
    *  committed. */
   afterChange?: (organizationId: string, row: Row, action: string) => Promise<void>;
 
-  /** Extra validation. Return a string to reject with 400. */
-  validate?: (body: Row, organizationId: string) => Promise<string | null>;
+  /**
+   * Extra validation. Return a string to reject with 400.
+   *
+   * `existing` is the pre-update row on a PATCH, and undefined on a create. Validators that
+   * check a pair of fields together MUST use it: a PATCH carries only the fields being changed,
+   * so validating the body alone means half a pair looks absent and the check is skipped
+   * entirely. That is how a cross-tenant id gets written by sending it without its type.
+   */
+  validate?: (
+    body: Row,
+    organizationId: string,
+    existing?: Row,
+  ) => Promise<string | null>;
 };
 
 /**
@@ -150,7 +161,7 @@ export function crudRoutes<T extends PgTable>(opts: CrudOptions<T>) {
 
     const body = await c.req.json<Row>().catch(() => ({}) as Row);
     if (opts.validate) {
-      const problem = await opts.validate(body, organizationId);
+      const problem = await opts.validate(body, organizationId, before as Row);
       if (problem) return c.json({ error: problem }, 400);
     }
 
