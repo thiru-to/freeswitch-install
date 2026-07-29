@@ -11,6 +11,9 @@ import { extensions } from "./routes/extensions";
 import { fsXml } from "./routes/fs-xml";
 import { tenants } from "./routes/tenants";
 import { faxHook, faxes } from "./routes/fax";
+import {
+  inboundRoutes, ivrMenus, outboundRoutes, ringGroups, timeConditions, trunks,
+} from "./routes/telephony";
 import { ping as redisPing } from "./services/redis";
 import { esl } from "./services/esl";
 import { pool, db } from "./db";
@@ -73,6 +76,12 @@ app.route("/fs/fax", faxHook);
 app.route("/api/tenant", tenants);
 app.route("/api/extensions", extensions);
 app.route("/api/faxes", faxes);
+app.route("/api/trunks", trunks);
+app.route("/api/inbound-routes", inboundRoutes);
+app.route("/api/outbound-routes", outboundRoutes);
+app.route("/api/ring-groups", ringGroups);
+app.route("/api/ivr-menus", ivrMenus);
+app.route("/api/time-conditions", timeConditions);
 
 app.notFound((c) => c.json({ error: "Not found" }, 404));
 
