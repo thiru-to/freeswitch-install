@@ -17,6 +17,10 @@ LimitRTPRIO=infinity
 LimitRTTIME=7000000
 ExecStart=${PREFIX}/bin/freeswitch -ncwait -nonat
 ExecReload=${PREFIX}/bin/fs_cli -x reloadxml
+# Ask FreeSWITCH to shut down cleanly rather than letting systemd SIGTERM it, so it can tear
+# down channels and flush CDRs first.
+ExecStop=${PREFIX}/bin/freeswitch -stop
+TimeoutStopSec=45
 Restart=on-failure
 RestartSec=5
 

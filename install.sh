@@ -69,7 +69,6 @@ sudo ./bootstrap.sh -j
 FS_ENABLE_MODULES="
 applications/mod_callcenter
 applications/mod_cidlookup
-applications/mod_memcache
 applications/mod_hiredis
 applications/mod_curl
 applications/mod_easyroute
@@ -112,9 +111,15 @@ sudo ./configure -C \
 sudo make -j"$JOBS"
 sudo make install
 
-### Install freeswitch sounds
-sudo make sounds-install moh-install
-sudo make cd-sounds-install cd-moh-install
+### Install freeswitch sounds, one rate at a time. Do NOT use the hd-/uhd-/cd- convenience
+### targets: they chain downwards (cd- depends on uhd- depends on hd- depends on 8k), so
+### 'cd-sounds-install' quietly drags down all four rates (~383MB). The per-rate targets below
+### go through the Makefile's .DEFAULT rule and fetch exactly one tarball each.
+### 8000 covers G.711/PSTN legs, 48000 covers Opus. Add 16000/32000 here if you ever need them.
+FS_SOUND_RATES="8000 48000"
+for rate in $FS_SOUND_RATES; do
+  sudo make "sounds-en-us-callie-${rate}-install" "sounds-music-${rate}-install"
+done
 
 ### Replace the stock vanilla config with the minimal one. 'make install' only lays down a
 ### config when $PREFIX/conf is absent, and 'config-minimal' will not overwrite existing
@@ -137,6 +142,32 @@ for m in $FS_DISABLE_MODULES; do
   sudo sed -i "s|<load module=\"${mod_name}\"/>|<!-- <load module=\"${mod_name}\"/> -->|" \
     "$FS_AUTOLOAD_CONF"
   echo "Un-autoloaded '$mod_name' - it is not built"
+done
+
+### The minimal config's "Codec Interfaces" section is empty, so only the core G.711
+### (PCMU/PCMA) codecs are available - mod_opus gets built but is never loaded. Opus is what
+### keeps quality sane over WiFi/mobile, where G.711 has no packet loss concealment and no
+### bandwidth adaptation, so autoload it.
+FS_AUTOLOAD_ADD="mod_opus"
+for mod_name in $FS_AUTOLOAD_ADD; do
+  if [ ! -f "$PREFIX/mod/${mod_name}.so" ]; then
+    echo "ERROR: ${mod_name}.so was not built but is required" >&2
+    exit 1
+  fi
+  ### A module's own config comes from the vanilla tree - the minimal one does not ship it,
+  ### and without it the module logs an error and falls back to built-in defaults. For opus
+  ### that config is what turns on FEC and VBR, which is exactly what makes it usable on WiFi.
+  conf_name="${mod_name#mod_}.conf.xml"
+  src_conf="$BUILD_DIR/freeswitch/conf/vanilla/autoload_configs/$conf_name"
+  if [ -f "$src_conf" ] && [ ! -f "$PREFIX/conf/autoload_configs/$conf_name" ]; then
+    sudo install -m 644 "$src_conf" "$PREFIX/conf/autoload_configs/$conf_name"
+    echo "Installed $conf_name from the vanilla config"
+  fi
+
+  grep -q "<load module=\"${mod_name}\"/>" "$FS_AUTOLOAD_CONF" && continue
+  sudo sed -i "s|<!-- Codec Interfaces -->|<!-- Codec Interfaces -->\n    <load module=\"${mod_name}\"/>|" \
+    "$FS_AUTOLOAD_CONF"
+  echo "Autoloaded '$mod_name'"
 done
 
 ### Create freeswitch group & user and give permissions.
