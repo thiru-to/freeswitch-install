@@ -11,12 +11,55 @@ An installer for a full VoIP PBX stack on Debian 13: Kamailio (public SIP edge) 
 - `config.env.example` → `/etc/voip-pbx/config.env` (0600). Site config plus generated secrets. **Never rotate a secret on re-run** — every service already holds the old value.
 - `steps/` — the numbered step scripts. The number encodes ordering; dependencies flow downwards.
 - `resources/freeswitch.service` — systemd unit template. `${PREFIX}` is substituted by sed at deploy time (systemd does not expand shell variables), so keep the placeholder intact.
+- `resources/lua/` — the call-time scripts, deployed by `31-freeswitch-config.sh`. This is the code that runs while a call is being set up; see "Call-time resolution" below.
+- `portal/api/` — Bun/Hono API. Owns every write: Postgres, the Redis cache, and Kamailio's `subscriber`/`domain` tables. Also holds the operator CLIs in `src/cli/`.
+- `portal/web/` — React admin portal (Vite, TanStack Router, React Query, Mantine). Built and published by `43-portal-web.sh`.
 
 Steps read their configuration from `/etc/voip-pbx/config.env` via `load_config`, and reference repo files through `$REPO_DIR` (set by `lib/common.sh`). Earlier versions cloned this repo onto the target to find `resources/`, which meant a local edit did nothing until pushed — that is gone; the local checkout is used directly.
 
 ### Topology this assumes
 
 Kamailio owns the public SIP ports (5060/5061) and does registration, auth and flood control. FreeSWITCH listens only on `127.0.0.1:5080` and trusts what Kamailio forwards (`auth-calls=false` paired with a loopback-only ACL — the pairing is what makes it safe, so do not change one without the other). rtpengine relays all media; FreeSWITCH NAT handling is deliberately off so the two do not both rewrite SDP.
+
+## The recurring failure mode here — read this before adding a check
+
+The same bug has been found in this codebase five separate times: **elaborate, well-commented configuration wired to nothing.** The RBAC role model guarded 2 of ~30 routes; role resolution read a session field that does not exist, so every user was a `member` and a `viewer` could delete extensions; the `apiKey` plugin was unused, broken and live on an internet-facing path; `sendInvitationEmail` was an empty function whose comment described a link that did not exist; a `pg_query_one` helper made a Lua fallback tier look present when nothing called it.
+
+Detailed comments are what makes this hard to see — the prose describes intent so convincingly that the absent enforcement reads as present. So:
+
+- **Make the check structural, not remembered.** `permission` is a *required* option on `crudRoutes` (`portal/api/src/lib/crud.ts`) precisely so a new resource cannot be added without one. Prefer that shape over "remember to add the middleware".
+- **Prove a control works by trying to break it.** Every one of the above passed typecheck, lint and build. Sign in as the low-privilege role and attempt the thing it must not do; then re-run the identical sequence after the fix.
+- Sub-path routes (`/:id/members`, `/:id/options`, `/:id/password`) are separate Hono apps mounted onto the parent, so they do **not** inherit its `crudRoutes` gate. Each mounts its own `requireTenant` + `requirePermission` — check for both when touching them.
+
+## The portal (portal/api, portal/web)
+
+- **A tenant IS a better-auth organization.** `session.activeOrganizationId` is the scope for every request. `requireTenant` (`portal/api/src/middleware/tenant.ts`) refuses to proceed without one rather than defaulting to "all" — an unscoped query here is a data breach, not a bug. This is the isolation boundary; the plan chose API-layer enforcement over Postgres RLS because the API is the only writer.
+- **The role comes from the `member` row, re-read on every request** — not from the session. Two reasons, both bugs that happened: `session.activeOrganizationRole` does not exist (so the `?? "member"` fallback fired every time), and `activeOrganizationId` is copied into the session at set-active time, so a removed member kept full access for up to eight hours. One indexed lookup on `(user_id, organization_id)`.
+- Roles are defined once in `portal/api/src/auth.ts` via `createAccessControl`, exported as `ROLES`, and enforced by `requirePermission` calling `.authorize()`. Add a permission to the statement, not to a hard-coded role list. An unknown role is refused, never defaulted.
+- **No self-service registration**, by design — a portal account administers telephony, so a compromise is toll fraud on a customer's bill. Three layers: nginx 404s `^/api/auth/sign-up`, a `databaseHooks.user.create.before` hook throws unless an in-process flag is set, and `src/cli/create-user.ts` sets that flag. `emailAndPassword.disableSignUp` is **not** usable here — better-auth enforces it in the same handler `auth.api.signUpEmail()` calls, so it would block the CLI too.
+- There is **no default admin account and no seeding step.** The operator runs `create-user.ts` then `provision-tenant.ts` on the server. Adding a second user to an existing tenant has no CLI yet: `provision-tenant.ts` stops once the organization has any member.
+- `42-nginx.sh` gates the SPA with `auth_request` against `GET /internal/session` (200/401, fails closed). Two things there are load-bearing: **`location = /` must exist as an exact match** or the site root falls into the gated prefix and an anonymous visitor 404s at `/` with no way to reach the login page; and `/assets/` must stay public or the login page cannot load its own bundle. The second is an accepted limitation, documented in the README — route names stay readable.
+- better-auth reads the client address from **`x-real-ip`, not `x-forwarded-for`**. nginx builds XFF with `$proxy_add_x_forwarded_for`, which appends to whatever the client sent, so a client can prepend a fake address and be rate-limited as that. Without a usable header better-auth falls back to one shared bucket per path, which is worse than no limiter: one attacker locks out every user.
+- Postgres has both databases: `kamailio` and `voipapi` (that is the API's, despite the repo name). The systemd unit is `voip-api`, the service account `voipapi`, the deploy directory `/opt/voip-api`. CLIs must be run from there, not the git checkout — the checkout has neither `.env` nor dependencies.
+- React Query v5 tracks which result properties a component reads, so **passing a whole `useQuery` result down to a child breaks the subscription.** Destructure at the call site and pass the fields (`QueryState` in `components/Resource.tsx` takes them separately, with a comment saying why). Also check `isEmpty` against `isSuccess`, not just an empty array — a failed fetch otherwise renders "No trunks yet".
+- `bun install` fails for an unprivileged user against a root-owned bun cache. Use `bun_as` from `lib/common.sh`.
+
+## Call-time resolution (resources/lua)
+
+`31-freeswitch-config.sh` binds `mod_lua` as the primary XML handler and `mod_xml_curl` second; bindings fall through, so declining in Lua is how a request reaches the API. Two tiers on purpose:
+
+1. `xml_handler.lua` answers from Redis, reached through `mod_hiredis`. The API writes those keys; Lua only ever reads them. Key shapes are contractual — they are listed in `portal/api/src/services/redis.ts`, and changing one means changing both sides.
+2. `mod_xml_curl` → the API → Postgres, for anything the cache does not hold.
+
+- **There is deliberately no Postgres tier in Lua.** It was planned, half-written (`pg_query_one`), never called, and has been removed. Do not reintroduce it: it would mean reimplementing DID, feature-number and outbound-route resolution in a second language, and the case it was for (cold cache) is now handled by the API's warm watchdog.
+- Redis is a **pure cache** (`save ""`, `appendonly no`), so a restart empties it — and `unattended-upgrades` will do that at night. `index.ts` polls a `voip:warm` sentinel every 60s and rebuilds when it is gone; `claimWarm()` uses `SET NX` so multiple API instances produce one rebuild. Without this, every call setup took the HTTP path indefinitely and the tier meant to survive an API outage was silently off.
+- `rebuildTenant` purges before repopulating, using the **enumerated** patterns in `keys.tenantPatterns` rather than `voip:*:<domain>*` — the trailing wildcard would also match a tenant whose domain merely starts with this one. A new key shape must be added there or it survives a rebuild as a ghost.
+- **When testing anything the XML handler produces, run `fs_cli -x xml_flush_cache` between phases.** FreeSWITCH's own directory cache will serve the previous answer and turn a real failure into a passing test — this produced a false positive during the cache-resilience work.
+- `strftime_tz`'s format string must not contain `|` — it is parsed as an epoch delimiter. `time_condition.lua` uses commas.
+- A time-condition rule with `invert` must **break** the loop when it matches. Continuing lets a later matching rule overwrite the exclusion, which silently re-opens a holiday.
+- The `limit` *application* hangs up on exceed, so it cannot be used to detect call waiting — an answered call is a billed call. Read the count with the `limit_usage` API, decide, then increment with a bare `limit`.
+- Feature codes are matched **before** the directory so a tenant cannot shadow one with an extension, and the subject is the authenticated user from `X-Auth-User`, never `From:`. Escape codes before using them as patterns — `^*97$` is invalid PCRE (`regex_escape` in `xml_handler.lua`).
+- Internally dialled feature numbers (600 for a ring group, 700 for the attendant) need the `voip:num:` index, checked after the directory. Without it a dialled 600 is neither an extension nor a DID and dies as `UNALLOCATED_NUMBER`.
 
 ## Validating changes
 
@@ -25,6 +68,10 @@ Static checks first — but do not stop there. `bash -n` and `shellcheck` both p
 ```sh
 bash -n install.sh
 shellcheck install.sh
+
+# Portal, when it was touched. TanStack's route tree is generated, so typecheck regenerates it.
+cd portal/api && bun run typecheck
+cd portal/web && bun run typecheck && bun run lint && bun run build
 ```
 
 Real verification is an end-to-end run in a Debian 13 systemd container (~2 min on 12 cores). This is the only thing that catches missing dev libraries, modules that fail to load at boot, and service start-up problems.
@@ -51,6 +98,15 @@ Assertions worth making afterwards — each of these has caught a real bug:
 - **zero `[ERR]`/`[CRIT]` in `$PREFIX/log/freeswitch.log`** — a successful build does not imply a clean boot
 - re-running the script over the finished install exits 0 again (it is meant to be idempotent)
 
+For portal changes, in the same container:
+
+- anonymous: `/` is the login page, the app routes 404, `/api/*` 401, `/health` returns **JSON not HTML**, `POST /api/auth/sign-up/email` 404
+- signed in: a deep-link refresh on `/trunks` returns the app rather than 404 — the whole `auth_request` design exists to make that hold
+- **a low-privilege role is refused what it must not do.** Sign in as `viewer` and attempt a trunk create; a `400` for a missing field means the gate passed and validation ran, a `200` means it did not
+- CLIs run from the deployed directory: `cd /opt/voip-api && sudo -u voipapi bun run src/cli/create-user.ts ...`
+
+Copying the working tree into the container with `tar` **does not delete files that moved** — a stale route file left behind by a rename will keep being served and looks like a product bug. Remove the target directory first when route files have moved.
+
 **Architecture caveat — this has already caused a production failure.** On Apple Silicon the container is arm64; the servers are x86_64 (Google Cloud C4). An arm64 pass is not a general pass. The concrete case: libvpx needs an external assembler (yasm/nasm) for its SSE/AVX paths on x86_64, but uses NEON intrinsics via gcc on arm64 and never asks — so a missing assembler is *completely invisible* on arm64 and fails the build on a real server. Any change touching apt dependencies or `./configure` flags should be re-run on amd64:
 
 ```sh
@@ -65,7 +121,9 @@ Known limitation of the emulated amd64 container: **its systemd is broken** — 
 - Steps must be safe to re-run. Use the `lib/common.sh` helpers rather than raw `apt-get` / `cat >` — that is what makes a second run quiet instead of noisy and destructive.
 - **Do not lock "other" out of `/usr/local/freeswitch`.** Anyone with sudo can read it anyway, so `o-rwx` adds no protection and only breaks routine inspection (this was a real bug: admins got permission denied everywhere). Writes are restricted through the `freeswitch` group; config dirs are setgid so admin-created files stay group-readable by the service.
 - `31-freeswitch-config.sh` binds ESL to `127.0.0.1` with a generated password. The stock config listens on `::`, which fails outright on IPv6-less hosts and is far too open where it does work.
-- `33-kamailio-config.sh` writes a deliberately conservative routing config — register, authenticate, protect, relay. Number translation, outbound trunking and billing are business logic and are intentionally absent.
+- `34-kamailio-config.sh` (33 is STIR/SHAKEN) writes a deliberately conservative routing config — register, authenticate, protect, relay. Number translation, outbound trunking and billing are business logic and are intentionally absent.
+- Kamailio needs a per-listener `advertise` on any host behind 1:1 NAT (GCP, EC2), or SIP breaks entirely — the interface holds a 10.x address while endpoints must be told the public one. Global `advertised_address` is not enough. `acc`/`missed_calls` `db_extra` columns need explicit ALTERs, outside the schema-creation guard, or accounting fails on every call.
+- Do not `git add -A` in this repo: it sweeps `.claude/` and local MCP config into the commit. Stage paths explicitly.
 
 ## Modules and dependencies (30-freeswitch.sh)
 
@@ -103,3 +161,4 @@ Known limitation of the emulated amd64 container: **its systemd is broken** — 
   - **arm64 (native)** — exits 0 in ~120s, intended modules built and excluded ones absent, only the 8000/48000 sound rates present, mod_opus loaded and listed by `show codec`, `make` never enters `libs/libvpx`, service active with MainPID matching the pidfile, zero `[ERR]`/`[CRIT]`, clean stop/start, and a second run over the finished install exits 0 (~30s).
   - **x86_64 (emulated)** — full build succeeds in ~670s with no yasm/nasm error and libvpx never entered; started manually, FreeSWITCH reports ready with Opus present and no VP8/VP9/H264. The service could not be verified here (broken systemd in the emulated container, see above).
   - Not verified on Ubuntu 22.04 since these changes.
+- Portal auth verified 2026-07-30 in the arm64 container: anonymous 404s on app routes with the login page at `/`, deep-link refresh works signed in, a `viewer` is refused trunk writes, and a hand-inserted `admin` member row grants them. `15-mail.sh` added `msmtp`/`msmtp-mta` to the apt set **after** the last amd64 pass, so that run is still owed.

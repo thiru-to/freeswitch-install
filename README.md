@@ -11,8 +11,9 @@ install.sh              master installer - runs the steps in order
 config.env.example      site configuration template
 lib/common.sh           shared helpers (logging, idempotency, apt, files, services)
 steps/                  the numbered step scripts
-resources/              systemd unit templates
-portal/api/             the Hono API source
+resources/              systemd unit template
+resources/lua/          FreeSWITCH call-time scripts (XML handler, ring groups, IVR, ...)
+portal/api/             the Hono API source, plus the operator CLIs
 portal/web/             the React admin portal
 ```
 
@@ -331,6 +332,45 @@ Confirm the registration reached Kamailio:
 kamctl ul show
 ```
 
+### 8. Roles, and adding more people
+
+A tenant is an organization, and each account holds one role in it. The role decides what the
+API will do for them — it is enforced server-side on every route, not just hidden in the UI:
+
+| Role | Can |
+|---|---|
+| `viewer` | Read-only, and no recordings or audit log. For a support desk that must diagnose without being able to change routing. |
+| `member` | Day-to-day work: extensions and call flows, plus recordings. Reads trunks and routes but cannot change them or set carrier credentials. |
+| `admin` | Everything: trunks and carrier credentials, CDR export, deleting recordings, the audit log. |
+| `owner` | Same rights as `admin`. Created by `provision-tenant.ts`; a tenant has exactly one. |
+
+`member` is deliberately the useful-but-safe role — carrier credentials and billing exports are
+the two things a customer most often wants withheld from a general admin.
+
+No role can read a stored trunk password back. It is encrypted at rest and stripped from every
+API response; `admin` can only replace it.
+
+Adding a second person means two commands today — `create-user.ts` for the account, then a
+`member` row for the tenant:
+
+```bash
+cd /opt/voip-api
+sudo -u voipapi bun run src/cli/create-user.ts --email ops@example.com --name "Ops"
+
+# There is no CLI for this yet, and re-running provision-tenant.ts will NOT add them -
+# it stops once the organization has any member. Insert the row directly:
+sudo -u postgres psql voipapi -c "
+  INSERT INTO member (id, organization_id, user_id, role, created_at)
+  SELECT gen_random_uuid()::text,
+         (SELECT id FROM organization WHERE slug = 'acme'),
+         (SELECT id FROM \"user\" WHERE email = 'ops@example.com'),
+         'admin', now();"
+```
+
+The portal has an invite endpoint, but it is not finished: there is no mail transport wired to
+it and no accept-invitation screen, so inviting someone logs a link to the journal and nothing
+else. Use the above until that is real.
+
 ### Cloud gotchas worth knowing
 
 - **The public IP must be static.** A GCP ephemeral address or an EC2 instance without an
@@ -405,7 +445,7 @@ and mobile behind NAT.
 | `21-redis` | Redis for mod_hiredis and API caching |
 | `22-provision-databases` | Roles and databases, least privilege |
 | `30-freeswitch` | FreeSWITCH from source |
-| `31-freeswitch-config` | SIP profile, ACLs, ESL on loopback, Opus preference |
+| `31-freeswitch-config` | SIP profile, ACLs, ESL on loopback, Opus preference, call-time Lua |
 | `32-kamailio` | Kamailio from deb.kamailio.org |
 | `33-stir-shaken` | STIR/SHAKEN caller attestation (source build, off by default) |
 | `34-kamailio-config` | Schema, TLS, registrar, routing, WebRTC/WSS |
@@ -427,6 +467,9 @@ and mobile behind NAT.
 - Create your account with `create-user.ts`, then a tenant with `provision-tenant.ts` — see
   [step 7](#7-create-an-account-and-a-tenant). There is no self-service signup: the endpoint
   returns 404 and the API refuses it
+- Give anyone else the narrowest role that works — a `viewer` cannot change anything, and a
+  `member` cannot touch trunks or carrier credentials. See
+  [step 8](#8-roles-and-adding-more-people)
 - Create extensions **in the portal**, not with `kamctl add`. The API writes Kamailio's
   `subscriber` table itself, as an HA1 digest; a subscriber added by hand registers fine but is
   invisible to the portal and gets no dialplan, voicemail or CDR
@@ -435,6 +478,51 @@ and mobile behind NAT.
 - Narrow `ADMIN_ALLOW_CIDR` if it is still `0.0.0.0/0`
 - Set `OFFSITE_RSYNC_TARGET` so backups leave the host
 - Place a test call and confirm two-way audio in both directions
+
+## Portal access
+
+The console is behind a session gate at nginx, so only the login page exists until you sign in.
+`/extensions`, `/trunks`, `/calls` and the rest return **404** to anyone not signed in, and
+`/api/*` returns 401. A signed-in user refreshing on a deep link still gets the app.
+
+This changes what a broken install looks like: if the *whole* site 404s **including after you
+sign in**, the session probe is failing, not your account. Check the API first, then reapply the
+nginx config:
+
+```bash
+curl -s http://127.0.0.1:3000/health          # on the server
+sudo systemctl status voip-api
+sudo ./install.sh --only 42-nginx.sh --force  # the way back
+```
+
+The JavaScript bundle under `/assets/` stays public — the login page is served from it. So the
+route names are readable by anyone; the gate stops the console being *usable* or indexable, it
+does not make the feature list secret.
+
+Sessions last 8 hours. **There is no password reset yet** — no reset email is configured, so a
+forgotten password means deleting the account and recreating it, which also drops its tenant
+membership and needs the `member` row from
+[step 8](#8-roles-and-adding-more-people) putting back (or `provision-tenant.ts` re-run, if they
+were the owner). Worth knowing before you hand out an account.
+
+## Feature codes
+
+Dialled from a registered handset. The codes are fixed by convention rather than configurable —
+users learn `*72` once and expect it to mean the same thing everywhere, and making them tenant
+data would let one shadow `*97` or an emergency number.
+
+| Code | Does |
+|---|---|
+| `*97` | Your own voicemail, no PIN — the registration is already authenticated |
+| `*98` | Any mailbox, prompting for the number and PIN. For checking from someone else's desk |
+| `*78` / `*79` | Do not disturb on / off |
+| `*72<number>` / `*73` | Forward all calls to `<number>` / cancel |
+| `*90<number>` / `*91` | Forward on busy / cancel |
+| `*92<number>` / `*93` | Forward on no answer / cancel |
+
+Each of these changes the *calling* extension's own settings. The subject is taken from the
+authenticated identity Kamailio stamps on the call, not the `From:` header — otherwise editing
+one field in a softphone would let anyone forward someone else's phone or read their voicemail.
 
 ## Operations
 
