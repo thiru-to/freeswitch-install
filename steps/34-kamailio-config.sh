@@ -169,6 +169,41 @@ if [ "${ENABLE_STIR_SHAKEN:-0}" = "1" ]; then
   fi
 fi
 
+### --- Public address ---------------------------------------------------------------------
+
+### Every mainstream cloud puts the instance behind a 1:1 NAT: the NIC holds a private address
+### (10.x on GCP and AWS, often the public one on Vultr) and the public IP lives on the
+### provider's edge. Kamailio binds to the private address, so without being told otherwise it
+### writes that address into Via, Record-Route and Contact - and every SIP response and
+### in-dialog request from an external endpoint is then aimed at an address that does not exist
+### on the internet. Registration appears to work and calls fail one step later, which is a
+### miserable thing to debug.
+###
+### `advertise` on each PUBLIC listener makes Kamailio write the public address into those
+### headers while still binding to the private one. Per-listener rather than the global
+### `advertised_address`, which would apply to the loopback egress socket too and rewrite the
+### internal FreeSWITCH leg to a public address it must never use.
+###
+### Detected the same way rtpengine already does it, and skipped entirely when the two match,
+### which is the no-NAT case (Vultr and most bare metal).
+local_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}')"
+public_ip="$(curl -fsS --max-time 5 https://api.ipify.org 2>/dev/null || echo "")"
+
+ADV_SIP=""
+ADV_SIPS=""
+ADV_WSS=""
+if [ -n "$public_ip" ] && [ -n "$local_ip" ] && [ "$public_ip" != "$local_ip" ]; then
+  ADV_SIP=" advertise ${public_ip}:${SIP_PORT}"
+  ADV_SIPS=" advertise ${public_ip}:${SIPS_PORT}"
+  ADV_WSS=" advertise ${public_ip}:${WSS_PORT}"
+  info "NAT detected: Kamailio binds ${local_ip} and advertises ${public_ip}"
+elif [ -z "$public_ip" ]; then
+  ### Worth saying out loud rather than silently guessing: on a NATed host this is the
+  ### difference between a working PBX and one that registers but cannot complete a call.
+  warn "Could not determine the public IP. If this host is behind NAT, add 'advertise <public>'"
+  warn "  to the listen lines in /etc/kamailio/kamailio.cfg, or calls will fail mid-dialog."
+fi
+
 ### --- Routing configuration -----------------------------------------------------------------
 
 ### This is a deliberately conservative starting point: register/authenticate, protect, relay
@@ -195,8 +230,11 @@ server_header="Server: VoIP PBX"
 user_agent_header="User-Agent: VoIP PBX"
 sip_warning=no          # do not leak internal details in warning headers
 
-listen=udp:0.0.0.0:${SIP_PORT}
-listen=tcp:0.0.0.0:${SIP_PORT}
+# `advertise` is per-listener, not the global advertised_address: the egress listener below is
+# loopback and must keep writing 127.0.0.1, or the internal FreeSWITCH leg is sent to a public
+# address it should never use.
+listen=udp:0.0.0.0:${SIP_PORT}${ADV_SIP}
+listen=tcp:0.0.0.0:${SIP_PORT}${ADV_SIP}
 
 # Egress listener: the port FreeSWITCH sends outbound calls back to. Bound to the internal
 # address only and never exposed - steps/11-firewall.sh does not open it. Keeping it distinct
@@ -206,13 +244,13 @@ listen=tcp:0.0.0.0:${SIP_PORT}
 listen=udp:${FS_HOST}:${KAM_EGRESS_PORT}
 listen=tcp:${FS_HOST}:${KAM_EGRESS_PORT}
 #!ifdef WITH_TLS
-listen=tls:0.0.0.0:${SIPS_PORT}
+listen=tls:0.0.0.0:${SIPS_PORT}${ADV_SIPS}
 enable_tls=1
 #!endif
 #!ifdef WITH_WEBRTC
 # Browsers speak SIP over a secure WebSocket. Separate port from SIP TLS so a browser client
 # and a hardware phone are not competing for the same listener.
-listen=tls:0.0.0.0:${WSS_PORT}
+listen=tls:0.0.0.0:${WSS_PORT}${ADV_WSS}
 #!endif
 
 alias="${PBX_SIP_DOMAIN}"
