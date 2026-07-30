@@ -280,18 +280,28 @@ curl -I https://pbx.example.com   # portal
 A port that works on the server but not from outside is the provider firewall, not the
 installer.
 
-### 7. Create a tenant and an extension
+### 7. Create an account and a tenant
 
-Tenants are not self-served — a tenant owns a SIP domain, which is the isolation boundary, so
-minting one is an operator action. The order matters:
+**There is no self-service registration.** A portal account administers telephony, and a
+compromise means toll fraud billed to a tenant, so accounts are created by you on the server —
+the signup endpoint returns 404 and the API refuses it. Both commands run from the *deployed*
+API directory, which has the environment file and dependencies; the git checkout does not.
 
-**First**, open `https://pbx.example.com` and sign up. That creates the user account.
-
-**Then** provision a tenant owned by that account, from the *deployed* API directory (it has
-the environment file and dependencies; the git checkout does not):
+**First**, create the account. The password is generated and printed once:
 
 ```bash
 cd /opt/voip-api
+sudo -u voipapi bun run src/cli/create-user.ts \
+  --email you@example.com \
+  --name "Your Name"
+```
+
+Pass `--password` to choose your own (minimum 12 characters).
+
+**Then** give that account a tenant. A tenant owns a SIP domain, which is the isolation
+boundary, so this is deliberately a separate step:
+
+```bash
 sudo -u voipapi bun run src/cli/provision-tenant.ts \
   --name "Acme Corp" \
   --slug acme \
@@ -302,7 +312,11 @@ sudo -u voipapi bun run src/cli/provision-tenant.ts \
 `--domain` is the SIP domain endpoints register against. It is unique platform-wide, and for a
 single-tenant deployment it is normally the same as `PBX_SIP_DOMAIN`.
 
-Sign in again, create an extension in the portal, and register a softphone with:
+An account with no tenant can sign in but sees only a panel telling you to run the command
+above — it is not broken, just unfinished.
+
+**Now** open `https://pbx.example.com`, sign in, create an extension in the portal, and register
+a softphone with:
 
 | | |
 |---|---|
@@ -410,8 +424,9 @@ and mobile behind NAT.
 
 `99-postflight.sh` lists what remains. In short:
 
-- Sign up in the portal, then provision a tenant with `provision-tenant.ts` — see
-  [step 7](#7-create-a-tenant-and-an-extension)
+- Create your account with `create-user.ts`, then a tenant with `provision-tenant.ts` — see
+  [step 7](#7-create-an-account-and-a-tenant). There is no self-service signup: the endpoint
+  returns 404 and the API refuses it
 - Create extensions **in the portal**, not with `kamctl add`. The API writes Kamailio's
   `subscriber` table itself, as an HA1 digest; a subscriber added by hand registers fine but is
   invisible to the portal and gets no dialplan, voicemail or CDR

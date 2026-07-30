@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Card, Grid, Group, Loader, Stack, Text, Title } from "@mantine/core";
-import { endpoints, ApiError, type Extension, type TenantSettings } from "../lib/api";
+import { endpoints, ApiError, type Extension, type TenantSettings } from "../../lib/api";
 
 function Stat({ label, value, hint }: { label: string; value: string; hint?: string }) {
   return (
@@ -102,4 +102,4 @@ function Dashboard() {
   );
 }
 
-export const Route = createFileRoute("/")({ component: Dashboard });
+export const Route = createFileRoute("/_app/")({ component: Dashboard });

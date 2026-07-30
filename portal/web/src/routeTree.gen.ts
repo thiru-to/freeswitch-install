@@ -9,82 +9,98 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
-import { Route as IndexRouteImport } from './routes/index'
-import { Route as CallFlowsRouteImport } from './routes/call-flows'
-import { Route as CallsRouteImport } from './routes/calls'
-import { Route as ExtensionsRouteImport } from './routes/extensions'
-import { Route as RoutingRouteImport } from './routes/routing'
-import { Route as SettingsRouteImport } from './routes/settings'
-import { Route as TrunksRouteImport } from './routes/trunks'
+import { Route as AppRouteImport } from './routes/_app'
+import { Route as LoginRouteImport } from './routes/login'
+import { Route as AppIndexRouteImport } from './routes/_app/index'
+import { Route as AppCallFlowsRouteImport } from './routes/_app/call-flows'
+import { Route as AppCallsRouteImport } from './routes/_app/calls'
+import { Route as AppExtensionsRouteImport } from './routes/_app/extensions'
+import { Route as AppRoutingRouteImport } from './routes/_app/routing'
+import { Route as AppSettingsRouteImport } from './routes/_app/settings'
+import { Route as AppTrunksRouteImport } from './routes/_app/trunks'
 
-const IndexRoute = IndexRouteImport.update({
+const AppRoute = AppRouteImport.update({
+  id: '/_app',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LoginRoute = LoginRouteImport.update({
+  id: '/login',
+  path: '/login',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const CallFlowsRoute = CallFlowsRouteImport.update({
+const AppCallFlowsRoute = AppCallFlowsRouteImport.update({
   id: '/call-flows',
   path: '/call-flows',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const CallsRoute = CallsRouteImport.update({
+const AppCallsRoute = AppCallsRouteImport.update({
   id: '/calls',
   path: '/calls',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const ExtensionsRoute = ExtensionsRouteImport.update({
+const AppExtensionsRoute = AppExtensionsRouteImport.update({
   id: '/extensions',
   path: '/extensions',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const RoutingRoute = RoutingRouteImport.update({
+const AppRoutingRoute = AppRoutingRouteImport.update({
   id: '/routing',
   path: '/routing',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const SettingsRoute = SettingsRouteImport.update({
+const AppSettingsRoute = AppSettingsRouteImport.update({
   id: '/settings',
   path: '/settings',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
-const TrunksRoute = TrunksRouteImport.update({
+const AppTrunksRoute = AppTrunksRouteImport.update({
   id: '/trunks',
   path: '/trunks',
-  getParentRoute: () => rootRouteImport,
+  getParentRoute: () => AppRoute,
 } as any)
 
 export interface FileRoutesByFullPath {
-  '/': typeof IndexRoute
-  '/call-flows': typeof CallFlowsRoute
-  '/calls': typeof CallsRoute
-  '/extensions': typeof ExtensionsRoute
-  '/routing': typeof RoutingRoute
-  '/settings': typeof SettingsRoute
-  '/trunks': typeof TrunksRoute
+  '/': typeof AppIndexRoute
+  '/login': typeof LoginRoute
+  '/call-flows': typeof AppCallFlowsRoute
+  '/calls': typeof AppCallsRoute
+  '/extensions': typeof AppExtensionsRoute
+  '/routing': typeof AppRoutingRoute
+  '/settings': typeof AppSettingsRoute
+  '/trunks': typeof AppTrunksRoute
 }
 export interface FileRoutesByTo {
-  '/': typeof IndexRoute
-  '/call-flows': typeof CallFlowsRoute
-  '/calls': typeof CallsRoute
-  '/extensions': typeof ExtensionsRoute
-  '/routing': typeof RoutingRoute
-  '/settings': typeof SettingsRoute
-  '/trunks': typeof TrunksRoute
+  '/login': typeof LoginRoute
+  '/call-flows': typeof AppCallFlowsRoute
+  '/calls': typeof AppCallsRoute
+  '/extensions': typeof AppExtensionsRoute
+  '/routing': typeof AppRoutingRoute
+  '/settings': typeof AppSettingsRoute
+  '/trunks': typeof AppTrunksRoute
+  '/': typeof AppIndexRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
-  '/': typeof IndexRoute
-  '/call-flows': typeof CallFlowsRoute
-  '/calls': typeof CallsRoute
-  '/extensions': typeof ExtensionsRoute
-  '/routing': typeof RoutingRoute
-  '/settings': typeof SettingsRoute
-  '/trunks': typeof TrunksRoute
+  '/_app': typeof AppRouteWithChildren
+  '/login': typeof LoginRoute
+  '/_app/call-flows': typeof AppCallFlowsRoute
+  '/_app/calls': typeof AppCallsRoute
+  '/_app/extensions': typeof AppExtensionsRoute
+  '/_app/routing': typeof AppRoutingRoute
+  '/_app/settings': typeof AppSettingsRoute
+  '/_app/trunks': typeof AppTrunksRoute
+  '/_app/': typeof AppIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
+    | '/login'
     | '/call-flows'
     | '/calls'
     | '/extensions'
@@ -93,96 +109,125 @@ export interface FileRouteTypes {
     | '/trunks'
   fileRoutesByTo: FileRoutesByTo
   to:
-    | '/'
+    | '/login'
     | '/call-flows'
     | '/calls'
     | '/extensions'
     | '/routing'
     | '/settings'
     | '/trunks'
+    | '/'
   id:
     | '__root__'
-    | '/'
-    | '/call-flows'
-    | '/calls'
-    | '/extensions'
-    | '/routing'
-    | '/settings'
-    | '/trunks'
+    | '/_app'
+    | '/login'
+    | '/_app/call-flows'
+    | '/_app/calls'
+    | '/_app/extensions'
+    | '/_app/routing'
+    | '/_app/settings'
+    | '/_app/trunks'
+    | '/_app/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
-  IndexRoute: typeof IndexRoute
-  CallFlowsRoute: typeof CallFlowsRoute
-  CallsRoute: typeof CallsRoute
-  ExtensionsRoute: typeof ExtensionsRoute
-  RoutingRoute: typeof RoutingRoute
-  SettingsRoute: typeof SettingsRoute
-  TrunksRoute: typeof TrunksRoute
+  AppRoute: typeof AppRouteWithChildren
+  LoginRoute: typeof LoginRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
-    '/': {
-      id: '/'
+    '/_app': {
+      id: '/_app'
+      path: ''
+      fullPath: '/'
+      preLoaderRoute: typeof AppRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/login': {
+      id: '/login'
+      path: '/login'
+      fullPath: '/login'
+      preLoaderRoute: typeof LoginRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/_app/': {
+      id: '/_app/'
       path: '/'
       fullPath: '/'
-      preLoaderRoute: typeof IndexRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppIndexRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/call-flows': {
-      id: '/call-flows'
+    '/_app/call-flows': {
+      id: '/_app/call-flows'
       path: '/call-flows'
       fullPath: '/call-flows'
-      preLoaderRoute: typeof CallFlowsRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppCallFlowsRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/calls': {
-      id: '/calls'
+    '/_app/calls': {
+      id: '/_app/calls'
       path: '/calls'
       fullPath: '/calls'
-      preLoaderRoute: typeof CallsRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppCallsRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/extensions': {
-      id: '/extensions'
+    '/_app/extensions': {
+      id: '/_app/extensions'
       path: '/extensions'
       fullPath: '/extensions'
-      preLoaderRoute: typeof ExtensionsRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppExtensionsRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/routing': {
-      id: '/routing'
+    '/_app/routing': {
+      id: '/_app/routing'
       path: '/routing'
       fullPath: '/routing'
-      preLoaderRoute: typeof RoutingRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppRoutingRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/settings': {
-      id: '/settings'
+    '/_app/settings': {
+      id: '/_app/settings'
       path: '/settings'
       fullPath: '/settings'
-      preLoaderRoute: typeof SettingsRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppSettingsRouteImport
+      parentRoute: typeof AppRoute
     }
-    '/trunks': {
-      id: '/trunks'
+    '/_app/trunks': {
+      id: '/_app/trunks'
       path: '/trunks'
       fullPath: '/trunks'
-      preLoaderRoute: typeof TrunksRouteImport
-      parentRoute: typeof rootRouteImport
+      preLoaderRoute: typeof AppTrunksRouteImport
+      parentRoute: typeof AppRoute
     }
   }
 }
 
+interface AppRouteChildren {
+  AppCallFlowsRoute: typeof AppCallFlowsRoute
+  AppCallsRoute: typeof AppCallsRoute
+  AppExtensionsRoute: typeof AppExtensionsRoute
+  AppRoutingRoute: typeof AppRoutingRoute
+  AppSettingsRoute: typeof AppSettingsRoute
+  AppTrunksRoute: typeof AppTrunksRoute
+  AppIndexRoute: typeof AppIndexRoute
+}
+
+const AppRouteChildren: AppRouteChildren = {
+  AppCallFlowsRoute: AppCallFlowsRoute,
+  AppCallsRoute: AppCallsRoute,
+  AppExtensionsRoute: AppExtensionsRoute,
+  AppRoutingRoute: AppRoutingRoute,
+  AppSettingsRoute: AppSettingsRoute,
+  AppTrunksRoute: AppTrunksRoute,
+  AppIndexRoute: AppIndexRoute,
+}
+
+const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)
+
 const rootRouteChildren: RootRouteChildren = {
-  IndexRoute: IndexRoute,
-  CallFlowsRoute: CallFlowsRoute,
-  CallsRoute: CallsRoute,
-  ExtensionsRoute: ExtensionsRoute,
-  RoutingRoute: RoutingRoute,
-  SettingsRoute: SettingsRoute,
-  TrunksRoute: TrunksRoute,
+  AppRoute: AppRouteWithChildren,
+  LoginRoute: LoginRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

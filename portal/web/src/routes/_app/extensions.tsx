@@ -16,8 +16,8 @@ import {
   TextInput,
   Title,
 } from "@mantine/core";
-import { endpoints, type Extension } from "../lib/api";
-import { CallHandlingModal } from "../components/CallHandlingModal";
+import { endpoints, type Extension } from "../../lib/api";
+import { CallHandlingModal } from "../../components/CallHandlingModal";
 
 function CreateExtensionModal({
   opened,
@@ -258,4 +258,4 @@ function Extensions() {
   );
 }
 
-export const Route = createFileRoute("/extensions")({ component: Extensions });
+export const Route = createFileRoute("/_app/extensions")({ component: Extensions });

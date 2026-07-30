@@ -15,8 +15,8 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { endpoints, type Trunk } from "../lib/api";
-import { DeleteButton, ErrorAlert, PageHeader, QueryState } from "../components/Resource";
+import { endpoints, type Trunk } from "../../lib/api";
+import { DeleteButton, ErrorAlert, PageHeader, QueryState } from "../../components/Resource";
 
 function TrunkModal({
   trunk,
@@ -229,4 +229,4 @@ function TrunksPage() {
   );
 }
 
-export const Route = createFileRoute("/trunks")({ component: TrunksPage });
+export const Route = createFileRoute("/_app/trunks")({ component: TrunksPage });

@@ -13,8 +13,8 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { endpoints, type Cdr, type CdrFilters } from "../lib/api";
-import { PageHeader, QueryState } from "../components/Resource";
+import { endpoints, type Cdr, type CdrFilters } from "../../lib/api";
+import { PageHeader, QueryState } from "../../components/Resource";
 
 const PAGE_SIZE = 50;
 
@@ -255,4 +255,4 @@ function CallsPage() {
   );
 }
 
-export const Route = createFileRoute("/calls")({ component: CallsPage });
+export const Route = createFileRoute("/_app/calls")({ component: CallsPage });

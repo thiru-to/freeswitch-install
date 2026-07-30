@@ -22,9 +22,9 @@ import {
   type RingGroup,
   type TimeCondition,
   type TimeConditionRule,
-} from "../lib/api";
-import { DeleteButton, ErrorAlert, PageHeader, QueryState } from "../components/Resource";
-import { DestinationPicker, type DestinationValue } from "../components/DestinationPicker";
+} from "../../lib/api";
+import { DeleteButton, ErrorAlert, PageHeader, QueryState } from "../../components/Resource";
+import { DestinationPicker, type DestinationValue } from "../../components/DestinationPicker";
 
 /* ---------------------------------------------------------------------------------------
  * Ring groups
@@ -902,4 +902,4 @@ function CallFlowsPage() {
   );
 }
 
-export const Route = createFileRoute("/call-flows")({ component: CallFlowsPage });
+export const Route = createFileRoute("/_app/call-flows")({ component: CallFlowsPage });

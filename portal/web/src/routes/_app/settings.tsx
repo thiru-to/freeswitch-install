@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useQuery } from "@tanstack/react-query";
 import { Alert, Badge, Group, Loader, Stack, Table, Text, Title } from "@mantine/core";
-import { endpoints, ApiError, type TenantSettings } from "../lib/api";
+import { endpoints, ApiError, type TenantSettings } from "../../lib/api";
 
 function Row({ label, value, hint }: { label: string; value: React.ReactNode; hint?: string }) {
   return (
@@ -102,4 +102,4 @@ function Settings() {
   );
 }
 
-export const Route = createFileRoute("/settings")({ component: Settings });
+export const Route = createFileRoute("/_app/settings")({ component: Settings });

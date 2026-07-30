@@ -5,6 +5,7 @@
  * and middleware/tenant.ts refuses to run a query without it.
  */
 import { betterAuth } from "better-auth";
+import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
 // Moved out of core in better-auth 1.6.x into its own first-party package.
@@ -13,6 +14,7 @@ import { createAccessControl } from "better-auth/plugins/access";
 import { db } from "./db";
 import * as schema from "./db/auth-schema";
 import { env } from "./env";
+import { consumeSignupPermission } from "./lib/signup-gate";
 
 /**
  * Permissions. Deliberately coarse: a PBX admin either manages telephony or does not. Finer
@@ -91,6 +93,31 @@ export const auth = betterAuth({
     minPasswordLength: 12,
   },
 
+  /**
+   * No self-service registration. See lib/signup-gate.ts for why this is a hook rather than
+   * `emailAndPassword.disableSignUp` - that option would also block the operator CLI, since it
+   * is enforced in the same handler `auth.api.signUpEmail()` calls.
+   *
+   * This is the application-layer control. steps/42-nginx.sh also returns 404 for the signup
+   * path, so the endpoint is not reachable from the internet at all; this catches anything that
+   * reaches the API directly on loopback.
+   */
+  databaseHooks: {
+    user: {
+      create: {
+        before: async (newUser) => {
+          if (!consumeSignupPermission()) {
+            console.warn(`[auth] rejected signup attempt for ${newUser.email}`);
+            throw new APIError("BAD_REQUEST", {
+              message: "Registration is not open. Accounts are created by the operator.",
+            });
+          }
+          return { data: newUser };
+        },
+      },
+    },
+  },
+
   session: {
     expiresIn: 60 * 60 * 8,
     updateAge: 60 * 60,
@@ -98,6 +125,41 @@ export const auth = betterAuth({
   },
 
   trustedOrigins: [`https://${env.pbxFqdn}`],
+
+  /**
+   * Where to find the real client address behind nginx.
+   *
+   * Without this, better-auth logs "Rate limiting could not determine a client IP" and falls
+   * back to ONE shared bucket per path - which is worse than no limiter, because a single
+   * attacker exhausts the bucket and locks every legitimate user out of signing in.
+   *
+   * `x-real-ip`, NOT `x-forwarded-for`. nginx sets X-Forwarded-For with
+   * `$proxy_add_x_forwarded_for`, which APPENDS to whatever the client sent, so a client can
+   * prepend a fake address and be rate-limited as that instead. X-Real-IP is assigned from
+   * `$remote_addr` and overwrites, so it cannot be spoofed. See /etc/nginx/proxy_params,
+   * written by steps/42-nginx.sh.
+   */
+  advanced: {
+    ipAddress: {
+      ipAddressHeaders: ["x-real-ip"],
+    },
+  },
+
+  /**
+   * Second layer under nginx's `limit_req zone=api_auth` (5r/m per source address), which is the
+   * primary brute-force control. This one still matters: it is the only limiter in front of the
+   * API when something reaches it directly on loopback, and it is keyed per-path so sign-in gets
+   * a tighter budget than everything else.
+   */
+  rateLimit: {
+    enabled: true,
+    window: 60,
+    max: 60,
+    customRules: {
+      "/sign-in/email": { window: 300, max: 10 },
+      "/forget-password": { window: 300, max: 5 },
+    },
+  },
 
   plugins: [
     organization({

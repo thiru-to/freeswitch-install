@@ -71,6 +71,34 @@ app.get("/health", async (c) => {
 // better-auth owns /api/auth/** including the organization endpoints.
 app.on(["GET", "POST"], "/api/auth/*", (c) => auth.handler(c.req.raw));
 
+/**
+ * Session probe for nginx's `auth_request` (steps/42-nginx.sh).
+ *
+ * nginx branches on the status code alone, which is why this exists rather than using
+ * better-auth's own `/api/auth/get-session` - that answers 200 with a null body when there is no
+ * session, giving nginx nothing to act on.
+ *
+ * Deliberately NOT under /api/, so it can never be confused with a tenant-scoped route, and
+ * `internal` in the nginx block keeps it unreachable from outside.
+ *
+ * It checks for a session and nothing more. A user who exists but has no organization yet must
+ * still reach the app to be told that - 401ing them here would 404 the whole console with no
+ * explanation. The organization requirement belongs to requireTenant, which returns a precise 403.
+ */
+app.get("/internal/session", async (c) => {
+  try {
+    const session = await auth.api.getSession({ headers: c.req.raw.headers });
+    return session?.user ? c.body(null, 200) : c.body(null, 401);
+  } catch (err) {
+    /* Fail closed. If the session store is unreachable we cannot prove the caller is
+       authenticated, and serving the console to an unproven caller is the wrong way to be
+       wrong. The portal is unreachable until the database is back, which is already true of
+       everything else it does. */
+    console.error("[auth] session probe failed:", (err as Error).message);
+    return c.body(null, 401);
+  }
+});
+
 // The FreeSWITCH XML fallback. Machine-authenticated, not a user session.
 app.route("/fs/xml", fsXml);
 // fax_receive.lua reports completed receives here, with the same machine credential.

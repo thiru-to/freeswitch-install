@@ -115,6 +115,14 @@ server {
 
     # Authentication endpoints are the ones worth brute forcing, so they are limited far
     # more tightly than ordinary API traffic. better-auth mounts under /api/auth.
+    # There is no self-service registration: accounts are created by an operator with
+    # src/cli/create-user.ts. Returning 404 rather than 403 keeps the endpoint's existence
+    # unadvertised. The API refuses it as well (databaseHooks in portal/api/src/auth.ts) - this
+    # is the edge layer, that one catches anything reaching the API directly on loopback.
+    location ~ ^/api/auth/sign-up {
+        return 404;
+    }
+
     location ~ ^/api/(auth|login|token) {
         limit_req zone=api_auth burst=5 nodelay;
         proxy_pass http://127.0.0.1:${API_PORT};
@@ -125,6 +133,26 @@ server {
         limit_req zone=api_general burst=40 nodelay;
         proxy_pass http://127.0.0.1:${API_PORT};
         include /etc/nginx/proxy_params;
+    }
+
+    # The API's health endpoint. Without this it fell through to the SPA below and returned
+    # HTML, which broke the portal's own health badge - it calls /health and got a document.
+    location = /health {
+        proxy_pass http://127.0.0.1:${API_PORT};
+        include /etc/nginx/proxy_params;
+        access_log off;
+    }
+
+    # Session probe for the auth_request below. 'internal' means it cannot be requested
+    # directly - only nginx may invoke it.
+    location = /_session {
+        internal;
+        proxy_pass http://127.0.0.1:${API_PORT}/internal/session;
+        include /etc/nginx/proxy_params;
+        # No body is needed to check a cookie, and not forwarding one avoids buffering
+        # uploads twice on every request.
+        proxy_pass_request_body off;
+        proxy_set_header Content-Length "";
     }
 
     # The admin portal: a static Vite bundle published by 43-portal-web.sh.
@@ -138,13 +166,48 @@ server {
         try_files \$uri =404;
     }
 
+    # Always reachable, because these are what an anonymous visitor needs to reach the sign-in
+    # page at all: the entry point, the login route itself, and the favicon.
+    #
+    # An exact-match location for "/" is required. Without it the site root falls into the
+    # gated prefix location below and an anonymous visitor gets 404 at the site root -
+    # locked out with no way to reach the login page. The SPA boots here and its own guard
+    # sends them to /login.
+    location = / {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store, must-revalidate";
+    }
+
+    location = /login {
+        try_files /index.html =404;
+        add_header Cache-Control "no-store, must-revalidate";
+    }
+
+    location = /favicon.svg {
+        try_files \$uri =404;
+    }
+
     # TanStack Router owns the client-side routes, so any unmatched path has to fall through
     # to index.html or a refresh on a deep link returns 404.
+    #
+    # Gated on a valid session. auth_request is what lets both requirements hold at once: a
+    # signed-in operator refreshing on /trunks still gets the app, while an anonymous visitor
+    # gets 404 and cannot enumerate the console. A plain 404 on app paths would have broken
+    # refresh and bookmarks for everyone.
     location / {
+        auth_request /_session;
+        error_page 401 = @anon;
+
         try_files \$uri \$uri/ /index.html;
         # index.html itself must never be cached, or clients keep loading a bundle whose
         # hashed assets no longer exist after a deploy.
         add_header Cache-Control "no-store, must-revalidate";
+    }
+
+    # 404, not a redirect to /login: a redirect would confirm which paths exist. The client-side
+    # guard in routes/_app.tsx is what actually walks a user to the login page.
+    location @anon {
+        return 404;
     }
 }
 EOF

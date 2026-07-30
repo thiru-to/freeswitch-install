@@ -34,6 +34,20 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
 
+  /* A 401 means the session went away — expired (8 hours, set in auth.ts), signed out in
+     another tab, or the server restarted. Sending the user to sign in again is the only useful
+     response; the alternative is a stale error alert on a page they can no longer load.
+
+     Guarded against firing while already on /login, or a failed sign-in would reload the page
+     and discard the error message the user needs to read. */
+  if (res.status === 401 && !window.location.pathname.startsWith("/login")) {
+    const back = encodeURIComponent(window.location.pathname + window.location.search);
+    window.location.href = `/login?redirect=${back}`;
+    // Never settles — the navigation is already underway, and resolving would let callers render
+    // an error for a page that is being replaced.
+    return new Promise<never>(() => {});
+  }
+
   if (!res.ok) {
     let message = res.statusText;
     let detail: string | undefined;

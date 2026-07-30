@@ -17,9 +17,9 @@ import {
   Text,
   TextInput,
 } from "@mantine/core";
-import { endpoints, type InboundRoute, type OutboundRoute } from "../lib/api";
-import { DeleteButton, ErrorAlert, PageHeader, QueryState } from "../components/Resource";
-import { DestinationPicker, type DestinationValue } from "../components/DestinationPicker";
+import { endpoints, type InboundRoute, type OutboundRoute } from "../../lib/api";
+import { DeleteButton, ErrorAlert, PageHeader, QueryState } from "../../components/Resource";
+import { DestinationPicker, type DestinationValue } from "../../components/DestinationPicker";
 
 /* ---------------------------------------------------------------------------------------
  * Inbound
@@ -423,4 +423,4 @@ function RoutingPage() {
   );
 }
 
-export const Route = createFileRoute("/routing")({ component: RoutingPage });
+export const Route = createFileRoute("/_app/routing")({ component: RoutingPage });
