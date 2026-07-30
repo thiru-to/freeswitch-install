@@ -12,3 +12,6 @@ config.env
 *.bak-*
 
 .DS_Store
+
+# Local Claude Code / editor state, not project configuration.
+.claude/
