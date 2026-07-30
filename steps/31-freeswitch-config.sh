@@ -259,8 +259,9 @@ write_file "$CONF/autoload_configs/lua.conf.xml" 0644 freeswitch:freeswitch <<EO
   <settings>
     <param name="script-directory" value="${PREFIX}/scripts/?.lua"/>
     <param name="xml-handler-script" value="xml_handler.lua"/>
-    <!-- 'configuration' is deliberately absent: it is read at module load and reloadxml, not
-         on the call path, so mod_xml_curl serves it from the API where it is easier to change. -->
+    <!-- 'configuration' is deliberately absent, and is not bound to xml_curl either: nothing
+         serves it dynamically. It is read at module load and on reloadxml, and the static XML
+         in $CONF answers it. -->
     <param name="xml-handler-bindings" value="directory,dialplan"/>
   </settings>
 </configuration>
@@ -488,7 +489,14 @@ write_file "$CONF/autoload_configs/xml_curl.conf.xml" 0640 freeswitch:freeswitch
 <configuration name="xml_curl.conf" description="cURL XML Gateway">
   <bindings>
     <binding name="api_fallback">
-      <param name="gateway-url" value="${API_BASE_URL}/fs/xml" bindings="directory|dialplan|configuration"/>
+      <!-- directory|dialplan only. 'configuration' was bound here too, with a comment in
+           lua.conf.xml claiming the API served it - it does not, and never did: routes/fs-xml.ts
+           answers every configuration request with "not found". So the binding could only ever
+           cost an HTTP round trip per section at module load and on reloadxml, and during the
+           install it produced a run of [ERR] lines, because FreeSWITCH starts at step 30 and the
+           API does not exist until step 41. Configuration is served from the static XML in
+           $CONF, which is what was actually answering all along. -->
+      <param name="gateway-url" value="${API_BASE_URL}/fs/xml" bindings="directory|dialplan"/>
       <param name="gateway-credentials" value="fs:${FS_XML_GATEWAY_SECRET}"/>
       <param name="auth-scheme" value="basic"/>
       <!-- Fail fast. A hung API must not wedge call setup - there is a static fallback below. -->

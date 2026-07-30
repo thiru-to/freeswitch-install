@@ -59,18 +59,47 @@ if [ -x "$PREFIX/bin/fs_cli" ]; then
   check "SIP profile up"             bash -c "$PREFIX/bin/fs_cli -p $FS_ESL_PASSWORD -x 'sofia status' | grep -qi RUNNING"
 
   ### A clean boot log is a much stronger signal than 'the process is alive'.
-  ### `grep -c` exits 1 when the count is zero, so `|| echo 0` appended a SECOND line and
-  ### made this the two-line string "0\n0" - which then failed the numeric test and reported
-  ### a clean log as an error. Let grep print its own count and swallow the exit status.
-  errs="$(grep -icE '\[(ERR|CRIT)\]' "$PREFIX/log/freeswitch.log" 2>/dev/null || true)"
+  ###
+  ### Scoped to the CURRENT run, not the whole file. FreeSWITCH appends across restarts, so the
+  ### unscoped version reported errors from a previous life for as long as the file survived -
+  ### and it reliably failed a perfectly good install, because FreeSWITCH starts at step 30 and
+  ### anything it depends on that is installed later logs an error in the meantime. An error
+  ### from a run that has already been restarted away is history, not a finding.
+  ###
+  ### The comparison is lexicographic on 'YYYY-MM-DD HH:MM:SS', which sorts correctly and needs
+  ### no epoch arithmetic - mawk (Debian's default awk) has no mktime(). Both sides are local
+  ### time: FreeSWITCH logs local, and `date -d` renders systemd's timestamp as local.
+  fs_since=""
+  if fs_started="$(systemctl show freeswitch -p ActiveEnterTimestamp --value 2>/dev/null)" \
+     && [ -n "$fs_started" ]; then
+    fs_since="$(date -d "$fs_started" '+%Y-%m-%d %H:%M:%S' 2>/dev/null || true)"
+  fi
+
+  ### No timestamp available (FreeSWITCH not under systemd, or an unparseable value): fall back
+  ### to the whole file rather than skipping the check. Over-reporting is the safe direction.
+  fs_log_errors() {
+    if [ -n "$fs_since" ]; then
+      ### The timestamp prefix is required, not assumed. The log also carries untimestamped
+      ### console output (the startup banner, module lists), and comparing those first 19
+      ### characters against a date puts every one of them inside the window - letters sort
+      ### above digits. Every level-tagged line does carry a timestamp, so this loses nothing.
+      awk -v since="$fs_since" \
+        '/^[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2}/ && /\[(ERR|CRIT)\]/ \
+           && (substr($0, 1, 19) "") >= (since "")' \
+        "$PREFIX/log/freeswitch.log" 2>/dev/null || true
+    else
+      grep -aE '\[(ERR|CRIT)\]' "$PREFIX/log/freeswitch.log" 2>/dev/null || true
+    fi
+  }
+
+  errs="$(fs_log_errors | grep -c . || true)"
   errs="${errs:-0}"
   checks=$((checks + 1))
   if [ "$errs" -eq 0 ]; then
     ok "No errors in the FreeSWITCH log"
   else
-    fail "$errs [ERR]/[CRIT] lines in the FreeSWITCH log"
-    grep -iE '\[(ERR|CRIT)\]' "$PREFIX/log/freeswitch.log" 2>/dev/null \
-      | sed -E 's/^[0-9-]+ [0-9:.]+ [0-9.]+% //' | sort -u | head -5 | sed 's/^/      /'
+    fail "$errs [ERR]/[CRIT] lines in the FreeSWITCH log since it started"
+    fs_log_errors | sed -E 's/^[0-9-]+ [0-9:.]+ [0-9.]+% //' | sort -u | head -5 | sed 's/^/      /'
     problems=$((problems + 1))
   fi
 fi
