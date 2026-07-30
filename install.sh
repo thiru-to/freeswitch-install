@@ -196,9 +196,19 @@ CURRENT_STEP="startup"
 
 ### Any non-zero exit - including one from set -e inside a step - reports which step broke
 ### and where to read the log, rather than leaving a bare stack-free failure.
+###
+### EXIT_NEEDS_CONFIG is deliberately not treated as a failure. A first run that stops to let
+### the operator fill in config.env is the designed path, and printing "XX Failed during:
+### 00-preflight.sh" for it teaches people that a red ERROR from this installer is normal -
+### which is precisely the habit that makes them scroll past the run where something did break.
 # shellcheck disable=SC2329 # invoked indirectly by the EXIT trap below
 on_exit() {
   local rc=$?
+  if [ "$rc" -eq "${EXIT_NEEDS_CONFIG:-78}" ]; then
+    ### Still non-zero on the way out, so a wrapper script or CI job does not mistake "not
+    ### configured yet" for "installed successfully".
+    exit "$rc"
+  fi
   if [ "$rc" -ne 0 ]; then
     fail "Failed during: $CURRENT_STEP (exit $rc)"
     fail "Log: $LOG_FILE"

@@ -32,6 +32,15 @@ warn() { printf '  %s !!%s %s\n' "$_C_YELLOW" "$_C_RESET" "$*"; }
 fail() { printf '  %s XX%s %s\n' "$_C_RED"    "$_C_RESET" "$*" >&2; }
 die()  { fail "$*"; exit 1; }
 
+### Stop because the operator has to supply something, not because anything broke.
+###
+### A distinct exit code so install.sh can tell the two apart. Reporting "the config needs
+### filling in" as `XX Failed during: 00-preflight.sh` trains people to read a red ERROR as
+### normal, which is exactly the habit that makes them miss the run where something did break.
+### 78 is EX_CONFIG from sysexits.h.
+EXIT_NEEDS_CONFIG=78
+needs_config() { printf '  %s>>%s %s\n' "$_C_YELLOW" "$_C_RESET" "$*"; exit "$EXIT_NEEDS_CONFIG"; }
+
 ### --- Guards ---------------------------------------------------------------------------
 
 require_root() {
@@ -111,9 +120,17 @@ load_config() {
 
   if [ ! -f "$CONFIG_FILE" ]; then
     install -m 0600 "$REPO_DIR/config.env.example" "$CONFIG_FILE"
-    warn "Created $CONFIG_FILE from the template."
-    warn "Edit it now - PBX_FQDN, LETSENCRYPT_EMAIL and ADMIN_ALLOW_CIDR must be real."
-    die "Re-run once $CONFIG_FILE is filled in."
+    printf '\n'
+    ok "Created $CONFIG_FILE from the template."
+    printf '\n'
+    printf '  This is the expected first run. Nothing is wrong - the installer needs your\n'
+    printf '  site details before it can do anything useful.\n\n'
+    printf '  1. Edit the file:      sudo editor %s\n' "$CONFIG_FILE"
+    printf '  2. Set at least:       PBX_FQDN, PBX_SIP_DOMAIN, LETSENCRYPT_EMAIL,\n'
+    printf '                         ADMIN_ALLOW_CIDR, TIMEZONE\n'
+    printf '  3. Run again:          sudo ./install.sh\n\n'
+    printf '  PBX_FQDN must already resolve to this server: Let'"'"'s Encrypt validates over HTTP.\n'
+    needs_config "Waiting for configuration."
   fi
   chmod 0600 "$CONFIG_FILE"
   set -a
@@ -121,8 +138,14 @@ load_config() {
   . "$CONFIG_FILE"
   set +a
 
-  [ "${PBX_FQDN:-}" != "pbx.example.com" ] || die "PBX_FQDN is still the placeholder in $CONFIG_FILE."
-  [ -n "${PBX_FQDN:-}" ] || die "PBX_FQDN is not set in $CONFIG_FILE."
+  ### Also a configuration stop rather than a failure - the operator created the file but has
+  ### not filled it in yet, which is the same situation one step later.
+  if [ -z "${PBX_FQDN:-}" ] || [ "${PBX_FQDN:-}" = "pbx.example.com" ]; then
+    printf '\n'
+    printf '  PBX_FQDN is still the placeholder in %s.\n\n' "$CONFIG_FILE"
+    printf '  Set it to this server'"'"'s public hostname, then run again.\n\n'
+    needs_config "Waiting for configuration."
+  fi
 }
 
 ### --- Roles ----------------------------------------------------------------------------

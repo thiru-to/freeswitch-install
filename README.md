@@ -23,6 +23,7 @@ git clone https://github.com/thiru-to/freeswitch-install.git
 cd freeswitch-install
 
 # The first run creates /etc/voip-pbx/config.env and stops so you can fill it in.
+# It exits 78 and tells you what to set - that is the expected first run, not a failure.
 sudo ./install.sh
 
 sudo editor /etc/voip-pbx/config.env    # PBX_FQDN, LETSENCRYPT_EMAIL, ADMIN_ALLOW_CIDR
@@ -215,6 +216,11 @@ sudo ./install.sh
 
 sudo editor /etc/voip-pbx/config.env
 ```
+
+That first run ends with `>> Waiting for configuration.` and exit code 78. **That is the
+expected first run, not a failure** — the installer has nothing to work with until you fill in
+the file. A real failure looks different: it prints `XX Failed during: <step>` and points at
+the log.
 
 At minimum set:
 
