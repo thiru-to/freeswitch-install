@@ -7,12 +7,11 @@
   be down or mid-deploy without calls stopping.
 
   Fall-through chain, in order:
-      Redis (this script)  ->  Postgres (this script, narrow)  ->  mod_xml_curl  ->  static
+      Redis (this script)  ->  mod_xml_curl (the API)  ->  static
   Returning nothing here makes FreeSWITCH try the next binding, so declining is safe.
 
-  The API is the only writer of the Redis keys read here. This script deliberately contains
-  almost no SQL: every query in Lua is business logic living in a second language, so the
-  Postgres fallback covers cold-cache safety only, not the full routing engine.
+  The API is the only writer of the Redis keys read here, and this script contains NO SQL at
+  all - see the note further down on why the once-planned Postgres tier is deliberately absent.
 
   Globals provided by mod_lua: `XML_REQUEST` (section, tag_name, key_name, key_value),
   `params` (an Event), and `XML_STRING` for the reply.
@@ -25,7 +24,6 @@ local M = {}
 --------------------------------------------------------------------------------------- ]]
 
 local REDIS_PROFILE = "default"
-local PG_DSN = os.getenv("VOIP_PG_DSN") or ""
 local DEBUG = false
 
 local function log(level, fmt, ...)
@@ -62,28 +60,29 @@ local function redis_get(key)
 end
 
 --[[ ---------------------------------------------------------------------------------------
-  Postgres fallback. Narrow on purpose - two lookups, no routing logic.
+  There is no Postgres tier here, and that is a decision rather than an omission.
 
-  Requires mod_pgsql to be loaded: the core has no built-in pgsql:// DSN, only sqlite:// and
-  odbc:// plus a pluggable database-interface path that mod_pgsql registers.
+  The original design called for Redis -> Postgres (in Lua) -> mod_xml_curl -> static fallback.
+  A `pg_query_one` helper was written for the second tier and then never called by anything, so
+  the tier looked present and was not. Two reasons it stays absent:
+
+    - The directory entry cannot be rebuilt here. `sip_password_enc` and `voicemail_pin_enc` are
+      AES-256-GCM ciphertext and the key lives only in the API, so Lua can produce a <user> with
+      no usable credentials. Harmless for authentication - Kamailio authenticates against its own
+      subscriber table, and this profile runs auth-calls=false - but it cannot serve voicemail.
+    - The dialplan tier would mean reimplementing inbound-DID, feature-number and outbound-route
+      matching in Lua, next to the TypeScript that already does it. The plan named that risk
+      explicitly: two copies of routing logic drift, and the copy nobody exercises drifts first.
+
+  What actually protects against a cold cache is the warm watchdog in the API
+  (portal/api/src/index.ts): Redis holds nothing durable, so a restart empties it, and before the
+  watchdog existed the cache stayed empty until the API happened to restart - silently disabling
+  this whole tier. That is now detected within a minute and rebuilt.
+
+  The one case no tier can serve is Redis emptied AND the API unavailable at the same moment.
+  Registration survives it (Kamailio -> Postgres), call routing does not, and it self-heals as
+  soon as either comes back.
 --------------------------------------------------------------------------------------- ]]
-
-local function pg_query_one(sql)
-  if PG_DSN == "" then return nil end
-  local dbh = freeswitch.Dbh(PG_DSN)
-  if not dbh or not dbh:connected() then
-    log("warning", "postgres fallback unavailable (is mod_pgsql loaded?)")
-    return nil
-  end
-  local row = nil
-  dbh:query(sql, function(r) row = r end)
-  dbh:release()
-  return row
-end
-
-local function sql_escape(s)
-  return (tostring(s or ""):gsub("'", "''"))
-end
 
 --[[ ---------------------------------------------------------------------------------------
   XML helpers

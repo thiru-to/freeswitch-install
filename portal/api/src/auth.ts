@@ -8,8 +8,6 @@ import { betterAuth } from "better-auth";
 import { APIError } from "better-auth/api";
 import { drizzleAdapter } from "better-auth/adapters/drizzle";
 import { organization } from "better-auth/plugins";
-// Moved out of core in better-auth 1.6.x into its own first-party package.
-import { apiKey } from "@better-auth/api-key";
 import { createAccessControl } from "better-auth/plugins/access";
 import { db } from "./db";
 import * as schema from "./db/auth-schema";
@@ -179,20 +177,42 @@ export const auth = betterAuth({
       allowUserToCreateOrganization: false, // tenants are provisioned, not self-served
       organizationLimit: 1,
       creatorRole: "owner",
-      async sendInvitationEmail() {
-        // Wired to a real transport alongside voicemail-to-email; until then invitations are
-        // accepted via a link surfaced in the portal.
+      /**
+       * Not yet wired to a transport.
+       *
+       * This was an empty function whose comment said invitations were "accepted via a link
+       * surfaced in the portal" - there is no such link, and no invitation UI, so inviting
+       * someone silently did nothing at all and the invitee never learned they had been invited.
+       *
+       * Logging the accept URL is not the finished feature, but it converts a silent no-op into
+       * something an operator can act on: hand the link over, and the invitation works. When mail
+       * is wired end to end (steps/15-mail.sh gives the host a relay) this becomes a real send.
+       */
+      async sendInvitationEmail(data) {
+        const url = `https://${env.pbxFqdn}/accept-invitation/${data.id}`;
+        console.warn(
+          `[auth] invitation for ${data.email} to ${data.organization.name} was NOT emailed - ` +
+            `no transport is configured. Send this link manually: ${url}`,
+        );
       },
     }),
 
-    /**
-     * Machine credentials, scoped to an organization. Used by the FreeSWITCH xml_curl gateway,
-     * which must not authenticate as a human session.
+    /*
+     * The `apiKey` plugin was here, described as machine credentials for the FreeSWITCH xml_curl
+     * gateway. Removed, because all three parts of that were untrue:
+     *
+     *   - Nothing used it. The gateway authenticates with HTTP Basic against
+     *     FS_XML_GATEWAY_SECRET (routes/fs-xml.ts, fs-cdr.ts, fs-feature.ts, fax.ts).
+     *   - It did not work. Its endpoints returned 500 - the `apikey` table in db/auth-schema.ts
+     *     predates the plugin's current shape and is missing `configId` and `referenceId`.
+     *   - It was live anyway. /api/auth/api-key/* was reachable by any signed-in user, which is
+     *     auth surface on an internet-facing path earning nothing.
+     *
+     * When machine credentials are genuinely needed - a customer-facing API, or per-node
+     * credentials once roles split across hosts - add it back deliberately with a regenerated
+     * schema and a test. The `apikey` table is left in place (it is empty) so that removing this
+     * does not turn into a destructive migration on the next deploy.
      */
-    apiKey({
-      defaultPrefix: "voip_",
-      enableMetadata: true,
-    }),
   ],
 });
 

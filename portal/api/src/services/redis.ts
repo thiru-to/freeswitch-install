@@ -23,6 +23,19 @@ import { env } from "../env";
 export const redis = new RedisClient(env.redisUrl);
 
 export const keys = {
+  /**
+   * Sentinel proving this Redis instance still holds a warmed cache.
+   *
+   * Redis is configured as a pure cache (`save ""`, `appendonly no` in steps/21-redis.sh), so a
+   * restart empties it - and unattended-upgrades is enabled, so a Redis security update does
+   * exactly that, unattended. Nothing else notices: the xml_curl fallback answers from Postgres
+   * but never repopulates Redis, so the cache stayed empty until the API happened to restart or
+   * someone edited a config object. The Lua tier - the thing meant to survive an API outage -
+   * was silently switched off for as long as that lasted.
+   *
+   * Deliberately has no TTL. Its absence is the signal, and an expiring sentinel would fake it.
+   */
+  warmSentinel: () => "voip:warm",
   directory: (domain: string, user: string) => `voip:dir:${domain}:${user}`,
   routes: (domain: string) => `voip:routes:${domain}`,
   did: (domain: string, number: string) => `voip:did:${domain}:${number}`,
@@ -123,6 +136,31 @@ export async function safeDel(...keysToDelete: string[]): Promise<boolean> {
     return true;
   } catch (err) {
     console.error(`[redis] del failed:`, (err as Error).message);
+    return false;
+  }
+}
+
+/**
+ * Claims the right to warm the cache, and reports whether this caller won.
+ *
+ * `SET NX` so that with an API instance on each media node (the recommended split in the plan)
+ * a Redis restart produces one rebuild rather than one per node all writing the same keys.
+ *
+ * Returns false when the sentinel already exists - meaning the cache is warm, or another
+ * instance is warming it right now.
+ */
+export async function claimWarm(): Promise<boolean> {
+  try {
+    const reply = await redis.send("SET", [
+      keys.warmSentinel(),
+      new Date().toISOString(),
+      "NX",
+    ]);
+    return reply === "OK";
+  } catch (err) {
+    // Redis unreachable. Not a warm opportunity, and not worth failing over - the fall-through
+    // path still answers.
+    console.warn("[cache] could not claim the warm sentinel:", (err as Error).message);
     return false;
   }
 }

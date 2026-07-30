@@ -142,6 +142,12 @@ export const invitation = pgTable(
  * API keys, scoped to an organization. Used for machine access - notably the FreeSWITCH
  * xml_curl gateway credentials, which must not be a human session.
  */
+/**
+ * Dormant. The `apiKey` plugin that used this was removed from auth.ts - unused, broken and
+ * live. The table is kept so removing the plugin is not a destructive migration; it is empty.
+ * Re-enabling means regenerating this definition, since the plugin now expects `configId` and
+ * `referenceId` which are absent below.
+ */
 export const apikey = pgTable(
   "apikey",
   {

@@ -17,7 +17,7 @@ import { faxHook, faxes } from "./routes/fax";
 import {
   inboundRoutes, ivrMenus, outboundRoutes, ringGroups, timeConditions, trunks,
 } from "./routes/telephony";
-import { ping as redisPing } from "./services/redis";
+import { claimWarm, ping as redisPing } from "./services/redis";
 import { esl } from "./services/esl";
 import { pool, db } from "./db";
 import { tenantSettings } from "./db/schema";
@@ -151,7 +151,38 @@ async function warmCache(): Promise<void> {
   }
 }
 
-void warmCache();
+/**
+ * Re-warms the cache whenever Redis has been emptied under us.
+ *
+ * The startup warm above is not enough on its own. Redis holds nothing durable
+ * (steps/21-redis.sh sets `save ""` and `appendonly no`), so any Redis restart empties it - and
+ * `unattended-upgrades` is enabled, so a Redis security update does that unattended, at night.
+ * The xml_curl fallback keeps answering from Postgres but never repopulates Redis, so before
+ * this the cache stayed empty until the API happened to restart or someone edited something.
+ *
+ * Two consequences, both silent: every call setup took the HTTP path indefinitely, and the Lua
+ * tier that exists to survive an API outage was switched off for the duration. Verified by
+ * restarting Redis and watching DBSIZE stay at 0.
+ *
+ * A poll rather than keyspace notifications: notifications need `notify-keyspace-events`
+ * configured and a second connection held open, and would still miss the case where Redis was
+ * down when the event fired. Checking a sentinel is cheap and cannot miss.
+ */
+const WARM_CHECK_INTERVAL_MS = 60_000;
+
+async function warmIfCacheLost(): Promise<void> {
+  try {
+    if (!(await claimWarm())) return; // sentinel present: cache is warm, or a peer is warming it
+    console.warn("[cache] warm sentinel absent - Redis was restarted or flushed, rebuilding");
+    await warmCache();
+  } catch (err) {
+    console.warn("[cache] re-warm check failed:", (err as Error).message);
+  }
+}
+
+void warmCache().then(() => claimWarm());
+/* unref so this timer never holds the process open on shutdown. */
+setInterval(warmIfCacheLost, WARM_CHECK_INTERVAL_MS).unref();
 
 export default {
   port: env.port,
