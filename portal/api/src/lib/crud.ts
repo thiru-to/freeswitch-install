@@ -16,7 +16,12 @@ import { and, eq, type SQL } from "drizzle-orm";
 import type { PgTable, PgColumn } from "drizzle-orm/pg-core";
 import { db } from "../db";
 import { recordAudit } from "./audit";
-import { requireTenant, type AppEnv } from "../middleware/tenant";
+import {
+  actionForMethod,
+  requirePermission,
+  requireTenant,
+  type AppEnv,
+} from "../middleware/tenant";
 
 type Row = Record<string, unknown>;
 
@@ -26,6 +31,13 @@ export type CrudOptions<T extends PgTable> = {
   orgColumn: PgColumn;
   idColumn: PgColumn;
   entityType: string;
+
+  /**
+   * Resource name in the access-control statement in auth.ts. Required, not optional: making it
+   * optional would let a new resource be wired up with no permission checks at all, which is
+   * precisely how the role model came to be decorative in the first place.
+   */
+  permission: string;
 
   /** Whitelist of writable columns. Anything else in the body is ignored, so a client cannot
    *  set organizationId, id, or timestamps by including them. */
@@ -92,6 +104,17 @@ function pick(body: Row, writable: readonly string[]): Row {
 export function crudRoutes<T extends PgTable>(opts: CrudOptions<T>) {
   const app = new Hono<AppEnv>();
   app.use("*", requireTenant);
+
+  /**
+   * Permission enforced here rather than route by route, for the same reason tenant scoping is:
+   * a check that has to be remembered on every new handler is a check that will be forgotten.
+   * The method determines the action, so GET needs `read` and DELETE needs `delete` without any
+   * per-route wiring.
+   */
+  app.use("*", async (c, next) => {
+    const action = actionForMethod(c.req.method);
+    return requirePermission(opts.permission, action)(c, next);
+  });
 
   const present = opts.present ?? ((r: Row) => r);
 

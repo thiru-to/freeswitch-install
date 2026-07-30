@@ -6,7 +6,7 @@ import { and, desc, eq } from "drizzle-orm";
 import { db } from "../db";
 import { fax } from "../db/schema";
 import { recordInboundFax, type FaxReport } from "../services/fax";
-import { requireTenant, type AppEnv } from "../middleware/tenant";
+import { actionForMethod, requirePermission, requireTenant, type AppEnv } from "../middleware/tenant";
 
 /* ---------------------------------------------------------------------------------------
  * Machine endpoint: fax_receive.lua reports here after rxfax completes.
@@ -49,6 +49,11 @@ faxHook.post("/", async (c) => {
 
 export const faxes = new Hono<AppEnv>();
 faxes.use("*", requireTenant);
+/* A received fax is a recording of customer content, so it sits under the `recording` resource
+   in the statement rather than getting a category of its own - viewer has no access, member can
+   read, admin can delete. */
+faxes.use("*", async (c, next) =>
+  requirePermission("recording", actionForMethod(c.req.method))(c, next));
 
 faxes.get("/", async (c) => {
   const rows = await db.query.fax.findMany({

@@ -9,10 +9,14 @@ import { Hono } from "hono";
 import { and, count, desc, eq, gte, ilike, lte, or, sql } from "drizzle-orm";
 import { db } from "../db";
 import { cdr, extension, trunk } from "../db/schema";
-import { requireTenant, type AppEnv } from "../middleware/tenant";
+import { requirePermission, requireTenant, type AppEnv } from "../middleware/tenant";
 
 export const cdrs = new Hono<AppEnv>();
 cdrs.use("*", requireTenant);
+/* Read-only routes, so `read` is the only action needed. The statement also defines cdr:export,
+   which is reserved for a bulk download endpoint that does not exist yet - viewer and member
+   have read but not export, and that distinction only becomes load-bearing when it does. */
+cdrs.use("*", requirePermission("cdr", "read"));
 
 const MAX_LIMIT = 200;
 

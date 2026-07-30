@@ -25,7 +25,7 @@ import { recordAudit } from "../lib/audit";
 import { encrypt } from "../lib/crypto";
 import { cacheInboundRoutes, cacheRouteTable, rebuildTenant } from "../services/cache";
 import { reloadKamailio, removeTrunkAddress, syncTrunkAddress } from "../services/kamailio-sync";
-import { requireTenant, type AppEnv } from "../middleware/tenant";
+import { requirePermission, requireTenant, type AppEnv } from "../middleware/tenant";
 
 /**
  * Validates a polymorphic destination reference against the tenant.
@@ -105,6 +105,7 @@ export const trunks = crudRoutes({
   orgColumn: trunk.organizationId,
   idColumn: trunk.id,
   entityType: "trunk",
+  permission: "trunk",
   required: ["name", "host"],
   writable: [
     "name", "authMode", "host", "port", "transport", "username", "fromDomain",
@@ -139,6 +140,10 @@ export const trunks = crudRoutes({
  */
 const trunkSecrets = new Hono<AppEnv>();
 trunkSecrets.use("*", requireTenant);
+/* Carrier credentials are one of the two things the statement in auth.ts deliberately withholds
+   from a general admin, so this is guarded explicitly - it is a PUT on a sub-path and does not
+   inherit the crudRoutes gate above. */
+trunkSecrets.use("*", requirePermission("trunk", "update"));
 trunkSecrets.put("/:id/password", async (c) => {
   const { password } = await c.req.json<{ password?: string }>();
   if (!password) return c.json({ error: "password is required" }, 400);
@@ -174,6 +179,7 @@ export const inboundRoutes = crudRoutes({
   orgColumn: inboundRoute.organizationId,
   idColumn: inboundRoute.id,
   entityType: "inbound_route",
+  permission: "route",
   required: ["didPattern", "destinationType"],
   writable: ["didPattern", "description", "destinationType", "destinationId", "priority", "enabled"],
   validate: async (body, organizationId, existing) =>
@@ -190,6 +196,7 @@ export const outboundRoutes = crudRoutes({
   orgColumn: outboundRoute.organizationId,
   idColumn: outboundRoute.id,
   entityType: "outbound_route",
+  permission: "route",
   required: ["name", "pattern"],
   writable: [
     "name", "pattern", "trunkId", "stripDigits", "prependDigits",
@@ -241,6 +248,7 @@ export const ringGroups = crudRoutes({
   orgColumn: ringGroup.organizationId,
   idColumn: ringGroup.id,
   entityType: "ring_group",
+  permission: "callflow",
   required: ["number", "name"],
   writable: [
     "number", "name", "strategy", "ringTimeoutSec", "failoverType", "failoverId", "enabled",
@@ -258,6 +266,10 @@ export const ringGroups = crudRoutes({
  *  group itself, and a nested array would mean rewriting the whole group to add one person. */
 const ringGroupMembers = new Hono<AppEnv>();
 ringGroupMembers.use("*", requireTenant);
+/* Sub-path routes do not inherit the parent's crudRoutes gate. Membership changes who a call
+   rings, so it is a callflow update, not a read. */
+ringGroupMembers.use("*", async (c, next) =>
+  requirePermission("callflow", c.req.method === "GET" ? "read" : "update")(c, next));
 
 ringGroupMembers.get("/:id/members", async (c) => {
   const rows = await db
@@ -341,6 +353,7 @@ export const ivrMenus = crudRoutes({
   orgColumn: ivrMenu.organizationId,
   idColumn: ivrMenu.id,
   entityType: "ivr_menu",
+  permission: "callflow",
   required: ["number", "name"],
   writable: [
     "number", "name", "greetingSound", "invalidSound", "timeoutSec",
@@ -359,6 +372,8 @@ export const ivrMenus = crudRoutes({
  *  via the parent - crudRoutes cannot express that. */
 const ivrOptions = new Hono<AppEnv>();
 ivrOptions.use("*", requireTenant);
+ivrOptions.use("*", async (c, next) =>
+  requirePermission("callflow", c.req.method === "GET" ? "read" : "update")(c, next));
 
 ivrOptions.get("/:id/options", async (c) => {
   const [menu] = await db.select().from(ivrMenu)
@@ -421,6 +436,7 @@ export const timeConditions = crudRoutes({
   orgColumn: timeCondition.organizationId,
   idColumn: timeCondition.id,
   entityType: "time_condition",
+  permission: "callflow",
   required: ["name", "rules"],
   writable: [
     "name", "timezone", "rules", "matchType", "matchId", "noMatchType", "noMatchId", "enabled",

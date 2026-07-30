@@ -79,6 +79,17 @@ const owner = ac.newRole({
   audit: ["read"],
 });
 
+/**
+ * The roles, exported so middleware can enforce them.
+ *
+ * Exported deliberately rather than duplicated: these definitions were decorative for a while -
+ * every role was declared here in detail and then never consulted, so a `viewer` could create
+ * trunks, set carrier credentials and delete extensions. middleware/tenant.ts checks against
+ * THIS object, so the statement above is the one and only description of who may do what.
+ */
+export const ROLES = { owner, admin, member, viewer } as const;
+export type RoleName = keyof typeof ROLES;
+
 export const auth = betterAuth({
   database: drizzleAdapter(db, { provider: "pg", schema }),
 

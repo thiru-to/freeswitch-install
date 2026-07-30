@@ -17,10 +17,14 @@ import { encrypt, generateSipPassword, generateVoicemailPin } from "../lib/crypt
 import { recordAudit } from "../lib/audit";
 import { cacheExtension, invalidateExtension } from "../services/cache";
 import { syncSubscriber, removeSubscriber } from "../services/kamailio-sync";
-import { requireTenant, type AppEnv } from "../middleware/tenant";
+import { actionForMethod, requirePermission, requireTenant, type AppEnv } from "../middleware/tenant";
 
 export const extensions = new Hono<AppEnv>();
 extensions.use("*", requireTenant);
+/* Hand-rolled rather than built on crudRoutes (the SIP credential and Kamailio projection make
+   it a poor fit), so the permission gate is wired here explicitly rather than inherited. */
+extensions.use("*", async (c, next) =>
+  requirePermission("extension", actionForMethod(c.req.method))(c, next));
 
 /** The SIP password is never returned, on any route. It leaves the API only as an HA1 digest. */
 function present(row: typeof extension.$inferSelect) {
